@@ -141,14 +141,14 @@ describe('optimistic updates with revision + file hash', () => {
     const { recordId, candidates } = await repo.register(registerInput(ws));
     const withOne = await repo.updateCandidates(recordId, candidates, (doc) => ({
       ...doc,
-      candidates: [makeCandidate({ status: 'published' })],
+      candidates: [makeCandidate({ status: 'approved' })],
     }));
     assert.equal(withOne.doc.candidate_count, 1);
-    assert.equal(withOne.doc.published_count, 1);
+    assert.equal(withOne.doc.published_count, 0);
 
     const file = path.join(root, 'records', recordId, CANDIDATES_FILE);
     const text = await fsp.readFile(file, 'utf8');
-    await fsp.writeFile(file, text.replace('published_count: 1', 'published_count: 7'));
+    await fsp.writeFile(file, text.replace('published_count: 0', 'published_count: 7'));
     await expectCode(() => repo.loadCandidates(recordId), 'schema_invalid');
   });
 });

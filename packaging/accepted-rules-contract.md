@@ -1,3 +1,9 @@
+# 已采纳规则扩展契约（延期／历史记录）
+
+2026-09-21：一期已移除独立规则清单、采纳、迁移及复查实现和专属契约测试。本文保留历史设计，不再约束一期代码；下文提到的 schema、脚本和 CLI 命令不是当前能力。当前以根目录 PHASE1_SIMPLIFICATION_PLAN.md 及 design.md 顶部的一期契约为准。不读取本文来执行旧数据迁移。
+
+---
+
 # 已采纳规则清单契约（LC-01 冻结记录）
 
 冻结时间：2026-09-20。依据 [design.md 第 31 节](../design.md)。本文件是**契约与数值的记录处**：schema 定义在 `src/domain/rules.ts`，数值定义在 `src/domain/limits.ts`，`tests/unit/domain/rules.test.ts` 的最后一组用例把本文件的 schema id、错误码、CLI 子命令、文件名和数值逐条对回代码——改代码不改本文件，测试即失败。

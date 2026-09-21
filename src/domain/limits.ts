@@ -53,13 +53,6 @@ export const INGEST_MAX_CORRECTIVE_RESUBMISSIONS = 1;
 /** A scheduled drain processes at most this many records per run, lease per session. */
 export const DRAIN_MAX_SESSIONS_PER_RUN = 3;
 
-// --- Publish protocol (design 14 / 26.2, consumed by T13) --------------------
-
-/** A preview past this age must be recreated; publish never revives it. */
-export const PUBLISH_PREVIEW_TTL_MS = 10 * 60 * 1000;
-/** Harness target files above this size are refused before any write, never truncated. */
-export const TARGET_FILE_MAX_BYTES = 1024 * 1024;
-
 // --- Review decision surface (design 26.2, T12) ------------------------------
 
 /**
@@ -73,54 +66,4 @@ export const REVIEW_REQUEST_LOG_MAX = 500;
 
 export const HTTP_BODY_MAX_BYTES = 256 * 1024;
 export const HTTP_REQUEST_TIMEOUT_MS = 30_000;
-
-// --- Accepted-rules registry (design 31, frozen at LC-01) --------------------
-/*
- * Measured on 2026-09-20 with packaging/measure-rules-budget.mjs (macOS arm64,
- * Node v24.19.0) on synthetic registries serialized through the same
- * frontmatter renderer as the session documents, in both ASCII and CJK bodies of
- * ~1KiB and of the maximum size. See packaging/accepted-rules-contract.md for
- * the recorded numbers; these caps are protocol limits, not performance targets.
- */
-
-/**
- * One rule body is a rule, not a document: longer is rejected, never truncated.
- * Capped in UTF-8 bytes rather than characters because every downstream budget is
- * a byte budget and this product's rule text is commonly CJK (3 bytes per char).
- */
-export const RULE_CONTENT_MAX_BYTES = 4_000;
-/** Free-text scenario note attached to a structured scope, in UTF-8 bytes. */
-export const RULE_SCOPE_NOTE_MAX_BYTES = 500;
-/** Operation history kept per rule; the newest entries win, nothing is silently truncated. */
-export const RULE_HISTORY_MAX_ENTRIES = 200;
-/** Hard ceiling on rules in one registry; beyond it the file is treated as corrupt, not paged. */
-export const ACCEPTED_RULES_MAX_RULES = 5_000;
-/**
- * Safe read budget for accepted_rules.md: a larger file is refused before the
- * YAML parse rather than silently truncated. Measured (see
- * packaging/accepted-rules-contract.md) 9,139,064 bytes for 1,000 rules at the
- * maximum body size and 3,187,064 for 1,000 rules at ~1KiB bodies; both are
- * UTF-8 bounded, so 16MiB never rejects a legal 1,000-rule registry.
- */
-export const ACCEPTED_RULES_READ_MAX_BYTES = 16 * 1024 * 1024;
-/** Idempotency ledger in accepted_rules.md frontmatter, same window semantics as review. */
-export const RULES_REQUEST_LOG_MAX = 500;
-/** Operations committed per `rules migrate --apply`; migration is never a whole-library transaction. */
-export const RULES_MIGRATE_BATCH_MAX = 50;
-/** Binding serialized-size ceiling of one frozen review snapshot, checked on the real bytes. */
-export const RULE_REVIEW_SNAPSHOT_MAX_BYTES = 192 * 1024;
-/**
- * Ceiling, not a packing target: measured 40 x 4,000-byte ASCII bodies reach
- * 193,732 bytes, and CJK titles/notes push the same 40 rules past 192KiB.
- * `rules review-prepare` therefore packs by RULE_REVIEW_SNAPSHOT_MAX_BYTES and
- * reports the rules it could not carry as partial coverage - never a silent drop.
- */
-export const RULE_REVIEW_SNAPSHOT_MAX_RULES = 40;
-/** Episodes frozen into one review snapshot, and the matching observation ceiling. */
-export const RULE_REVIEW_SNAPSHOT_MAX_EPISODES = 200;
-/**
- * Explanation text of one rule observation, in UTF-8 bytes. 200 observations at
- * this cap stay inside the single-operation 256KiB pending-commit budget.
- */
-export const RULE_OBSERVATION_EXPLANATION_MAX_BYTES = 1_000;
 

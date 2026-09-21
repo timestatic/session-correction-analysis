@@ -55,6 +55,7 @@ function truncate(value: string): string {
 }
 
 export function validateSchema<T extends ZodTypeAny>(schema: T, record: Record<string, unknown>): T['_output'] {
+  assertPhase1Record(record);
   const result = schema.safeParse(record);
   if (!result.success) {
     const fields = result.error.issues
@@ -63,6 +64,22 @@ export function validateSchema<T extends ZodTypeAny>(schema: T, record: Record<s
     throw new ScaError('schema_invalid', `payload rejected by schema — ${truncate(fields)}`);
   }
   return result.data as T['_output'];
+}
+
+/** Reject retired state before parsing can discard fields or a writer can replay it. */
+export function assertPhase1Record(value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
+  const record = value as Record<string, unknown>;
+  const unsupported = (): never => { throw new ScaError('unsupported_operation', 'Phase 1 cannot modify legacy rule/publication records; keep the old files and use a new --data-root.'); };
+  if ('rule_review' in record || 'rule_ref' in record || record['status'] === 'published' || record['status'] === 'publish_failed') unsupported();
+  const publication = record['publication'];
+  if (typeof publication === 'object' && publication !== null) {
+    const fields = publication as Record<string, unknown>;
+    if (Object.keys(fields).some(key => key !== 'published' && key !== 'attempts') || fields['published'] !== false ||
+        (fields['attempts'] !== undefined && (!Array.isArray(fields['attempts']) || fields['attempts'].length > 0))) unsupported();
+  }
+  if (Array.isArray(record['candidates'])) for (const candidate of record['candidates']) assertPhase1Record(candidate);
+  if (record['pending_commit'] !== undefined) assertPhase1Record(record['pending_commit']);
 }
 
 /**

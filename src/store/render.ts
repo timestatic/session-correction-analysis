@@ -1,7 +1,6 @@
 import type { Candidate, CandidateStatus } from '../domain/candidates.js';
 import type { AnalyzeDocument, CandidatesDocument } from '../domain/documents.js';
 import type { EpisodeCommitted } from '../domain/episodes.js';
-import type { AcceptedRulesDocument, Rule, RuleScope } from '../domain/rules.js';
 import {
   hasReworkEvidence,
   isFormalCorrection,
@@ -210,103 +209,6 @@ function renderCandidate(candidate: Candidate): string {
   }
   if (candidate.needs_review !== undefined) {
     lines.push(bullet('需要复核', candidate.needs_review.reason));
-  }
-  return lines.join('\n');
-}
-
-const RULE_STATUS_LABELS: Record<Rule['status'], string> = {
-  active: '有效',
-  revoked: '已撤销',
-  superseded: '已被替代',
-};
-
-function scopeLabel(scope: RuleScope): string {
-  return scope.kind === 'project'
-    ? `project：${scope.canonical_workspace}${scope.project_name !== undefined ? `（${scope.project_name}）` : ''}${scope.note !== undefined ? ` — ${scope.note}` : ''}`
-    : `user${scope.note !== undefined ? `（${scope.note}）` : ''}`;
-}
-
-function deliveryLabel(rule: Rule): string {
-  const delivery = rule.delivery;
-  if (delivery === null) {
-    return '未沉淀（采纳不等于投递）';
-  }
-  if (delivery.kind === 'harness') {
-    return `harness ${delivery.state} → ${delivery.display_path} @ ${delivery.updated_at}`;
-  }
-  return `memory ${delivery.state} @ ${delivery.updated_at}`;
-}
-
-/**
- * Projection of the root registry (design 31.2). Every line restates frontmatter
- * facts; regeneration never invents any, and the User Notes region is preserved
- * by the writer rather than produced here.
- */
-export function renderRulesProjection(doc: AcceptedRulesDocument): string {
-  const lines: string[] = ['# Accepted Rules', ''];
-  const active = doc.rules.filter((rule) => rule.status === 'active').length;
-  lines.push(bullet('清单版本', String(doc.revision)));
-  lines.push(bullet('规则总数', `${String(doc.rules.length)}（有效 ${String(active)}）`));
-  lines.push(bullet('最近更新', doc.updated_at));
-  lines.push('');
-
-  if (doc.pending_acceptance !== null) {
-    const pending = doc.pending_acceptance;
-    lines.push('## 维护中：未完成的采纳', '');
-    lines.push(bullet('请求', pending.request_id));
-    lines.push(bullet('规则', pending.rule_id));
-    lines.push(bullet('来源', `${pending.record_id} / ${pending.candidate_id}`));
-    lines.push(bullet('写入时间', pending.created_at));
-    lines.push('', '此行存在即表示上一次采纳在两个文件之间被中断；下一次采纳或迁移会先尝试安全恢复。', '');
-  }
-
-  lines.push('## 已采纳规则', '');
-  if (doc.rules.length === 0) {
-    lines.push('（本清单暂无规则）', '');
-  }
-  for (const rule of doc.rules) {
-    lines.push(renderRule(rule), '');
-  }
-
-  lines.push('## 最近请求回执', '');
-  if (doc.request_log.length === 0) {
-    lines.push('（无）', '');
-  }
-  for (const receipt of doc.request_log.slice(-10)) {
-    lines.push(bullet(receipt.request_id, `${receipt.result} @ ${receipt.at}`));
-  }
-  return `${lines.join('\n')}\n`;
-}
-
-function renderRule(rule: Rule): string {
-  const lines: string[] = [`## ${rule.rule_id}：${text(rule.title)}`, ''];
-  lines.push(bullet('状态', RULE_STATUS_LABELS[rule.status]));
-  if (rule.superseded_by !== undefined) {
-    lines.push(bullet('后继', rule.superseded_by));
-  }
-  lines.push(bullet('版本', `v${String(rule.version)}`));
-  lines.push(bullet('内容 hash', rule.content_hash));
-  lines.push(bullet('范围', scopeLabel(rule.scope)));
-  lines.push(bullet('采纳时间', rule.accepted_at));
-  lines.push(bullet('版本生效', rule.version_effective_at));
-  lines.push(bullet('来源', `${rule.source.candidate_path} # ${rule.source.candidate_id}`));
-  lines.push(bullet('来源内容 hash', rule.source.candidate_content_hash));
-  lines.push(bullet('沉淀', deliveryLabel(rule)));
-  lines.push('- 正文：', '');
-  for (const paragraph of rule.content.split('\n\n')) {
-    lines.push(`    ${text(paragraph)}`, '');
-  }
-  lines.push('### 操作历史', '');
-  for (const entry of rule.history) {
-    const detail = [
-      entry.action,
-      `v${String(entry.version)}`,
-      entry.request_id !== undefined ? `请求 ${entry.request_id}` : undefined,
-      entry.note,
-    ]
-      .filter((part): part is string => part !== undefined && part.length > 0)
-      .join('，');
-    lines.push(bullet(entry.at, detail));
   }
   return lines.join('\n');
 }

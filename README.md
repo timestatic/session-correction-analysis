@@ -1,6 +1,6 @@
 # session-correction-analysis (sca)
 
-显式分析 AI 编码会话（Codex / Claude Code）中的纠错内容，生成候选规则/笔记，经人工评审后导出 Markdown。Phase 1 全部在本机完成：不做自动发布、不访问网络、不做历史搜索、无定时任务。
+显式分析 AI 编码会话（Codex / Claude Code）中的纠错内容，生成候选规则/笔记，经人工评审后导出 Markdown。CLI 在本机读取、校验和保存数据，不自行发起模型网络请求；语义分析由宿主 Agent 执行，是否联网取决于宿主配置。Phase 1 不做自动发布、不做历史搜索、无定时任务。
 
 ## 特性
 
@@ -28,6 +28,10 @@ npm run build
 ## 快速开始
 
 ```bash
+# 0. 首次试用选择一个尚不存在的独立目录，后续查看时继续使用同一路径
+#    如果该路径已有旧版数据，请换一个新路径，不要清空旧目录
+export SCA_DATA_ROOT="$HOME/.session-correction-analysis-phase1"
+
 # 1. 环境自检（Node 版本、PATH、数据目录可写性）
 sca doctor
 
@@ -78,7 +82,7 @@ npm run test:integration   # 集成测试
 npm run package:skill      # 构建技能发布包
 ```
 
-目录结构：`src/hosts`（主机 transcript 适配）、`src/domain`（规范化模型与约束）、`src/analysis`（prepare/ingest/dedup）、`src/store`（Markdown 存储、锁、原子提交）、`src/review`（评审决策）、`src/cli.ts`（命令行入口）、`tests/`（含合成 fixtures）。
+目录结构：`src/hosts`（主机 transcript 适配）、`src/domain`（规范化模型与约束）、`src/analysis`（prepare/ingest/rework）、`src/store`（Markdown 存储、锁、原子提交）、`src/review`（评审决策、候选详情、文本输出）、`src/cli.ts`（命令行入口）、`tests/`（含合成 fixtures）。
 
 ## License
 

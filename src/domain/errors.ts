@@ -30,12 +30,12 @@ export const ERROR_CODES = {
   runner_unavailable: {
     message: 'No host agent/model execution environment is available for semantic analysis.',
     retryable: true,
-    nextStep: 'Run the analysis Skill inside a configured host, or drain later; pending is preserved.',
+    nextStep: 'Run the analysis Skill explicitly inside a configured host; pending is preserved.',
   },
   unsupported_operation: {
-    message: 'This operation is not supported for the candidate target kind.',
+    message: 'This operation or legacy record is not supported in Phase 1.',
     retryable: false,
-    nextStep: 'Memory candidates use approval plus content output; harness candidates use preview/publish.',
+    nextStep: 'Use a new --data-root for Phase 1; review and approve the current candidate before text output.',
   },
   record_identity_mismatch: {
     message: 'A record with this id exists but its stored source identity differs.',
@@ -96,66 +96,6 @@ export const ERROR_CODES = {
     message: 'The candidate is not approved in its current content version.',
     retryable: false,
     nextStep: 'Approve the current version first; edits and revocations invalidate prior approvals.',
-  },
-  preview_expired: {
-    message: 'The publish preview no longer exists or passed its expiry.',
-    retryable: true,
-    nextStep: 'Create a fresh preview and publish against it.',
-  },
-  target_changed: {
-    message: 'The publish target content hash differs from the previewed value.',
-    retryable: true,
-    nextStep: 'Refuse the overwrite and re-preview.',
-  },
-  target_not_allowed: {
-    message: 'The publish target is outside the configured whitelist.',
-    retryable: false,
-    nextStep: 'Stop automatic publishing; the user must add the target explicitly.',
-  },
-  publication_in_doubt: {
-    message: 'A publication attempt cannot prove its phase and needs reconciliation.',
-    retryable: false,
-    nextStep: 'Compare target markers and expected hashes; never re-insert the rule.',
-  },
-  rules_registry_missing: {
-    message: 'Session records exist but this data root has no accepted_rules.md.',
-    retryable: false,
-    nextStep: 'Report the registry as uninitialized and run `sca rules migrate --dry-run`; a missing file never means zero rules.',
-  },
-  migration_required: {
-    message: 'Adopted candidates predate the rules registry and have not been migrated.',
-    retryable: false,
-    nextStep: 'Show the dry-run report to the user; apply migration is explicit and backed up, never automatic.',
-  },
-  rule_not_found: {
-    message: 'No rule with this id exists in the registry.',
-    retryable: false,
-    nextStep: 'List rules first; only an existing rule can be updated, revoked or re-delivered.',
-  },
-  rule_scope_unknown: {
-    message: 'The adoption or scope change cannot be bound to a provable project or explicit user scope.',
-    retryable: false,
-    nextStep: 'Ask the user to state the scope; never guess from a path rename, worktree or free text.',
-  },
-  rule_version_mismatch: {
-    message: 'A receipt or observation refers to a rule version that is no longer current.',
-    retryable: false,
-    nextStep: 'Keep it as a historical observation and re-snapshot before claiming anything about the current rule.',
-  },
-  rule_acceptance_recovery_failed: {
-    message: 'An interrupted cross-file adoption cannot be replayed safely.',
-    retryable: false,
-    nextStep: 'Show maintenance status and refuse adoption/publish writes; keep the conflict, never overwrite the user edit.',
-  },
-  registry_changed: {
-    message: 'accepted_rules.md no longer matches the hash the pending adoption recorded.',
-    retryable: true,
-    nextStep: 'Stop automatic replay, reload, and let the user resolve the external edit before retrying.',
-  },
-  request_conflict: {
-    message: 'This request id was already used with a different payload.',
-    retryable: false,
-    nextStep: 'Refuse the write and submit a new request id; the original receipt stays untouched.',
   },
   internal_error: {
     message: 'An unexpected internal failure occurred.',

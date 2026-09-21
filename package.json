@@ -2,7 +2,7 @@
   "name": "session-correction-analysis",
   "version": "0.1.0",
   "private": true,
-  "description": "Session correction / intervention analysis plugin (Skill + Hook + schedule) with Markdown as the single source of truth.",
+  "description": "Explicit session correction analysis, human candidate review and Markdown export.",
   "type": "module",
   "license": "UNLICENSED",
   "bin": {
@@ -14,7 +14,7 @@
   "scripts": {
     "package:skill": "node packaging/build-skill.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist/src dist/tests && tsc -p tsconfig.build.json",
     "clean": "rm -rf dist",
     "lint": "eslint .",
     "test": "npm run build && node --test \"dist/tests/unit/**/*.test.js\"",
@@ -22,7 +22,6 @@
     "eval:offline": "npm run build && node dist/src/eval/offline.js"
   },
   "dependencies": {
-    "diff": "^7.0.0",
     "proper-lockfile": "^4.1.2",
     "yaml": "^2.8.1",
     "zod": "^3.25.76"

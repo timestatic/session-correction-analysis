@@ -24,10 +24,7 @@ export interface ApprovalMetrics {
   review_coverage: number | null;
   /** A with target_kind=memory; copies/exports do not increase this. */
   effective_memory: number;
-  /** H — successfully published records; never added to the memory count. */
-  published: number;
-  /** Approved rules whose content is still marked published afterwards. */
-  published_still_approved: number;
+
 }
 
 export function approvalMetrics(candidates: readonly Candidate[]): ApprovalMetrics {
@@ -37,8 +34,6 @@ export function approvalMetrics(candidates: readonly Candidate[]): ApprovalMetri
   let rejected = 0;
   let superseded = 0;
   let effectiveMemory = 0;
-  let published = 0;
-  let publishedStillApproved = 0;
   for (const candidate of candidates) {
     switch (candidate.status) {
       case 'approved':
@@ -53,11 +48,6 @@ export function approvalMetrics(candidates: readonly Candidate[]): ApprovalMetri
         }
         break;
       case 'published':
-        published += 1;
-        if (hasCurrentApproval(candidate)) {
-          effective += 1;
-          publishedStillApproved += 1;
-        }
         break;
       case 'proposed':
         pendingReview += 1;
@@ -82,7 +72,5 @@ export function approvalMetrics(candidates: readonly Candidate[]): ApprovalMetri
     approval_rate: effective + rejected === 0 ? null : effective / (effective + rejected),
     review_coverage: effective + rejected + pendingReview === 0 ? null : (effective + rejected) / (effective + rejected + pendingReview),
     effective_memory: effectiveMemory,
-    published,
-    published_still_approved: publishedStillApproved,
   };
 }

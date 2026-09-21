@@ -11,13 +11,10 @@ import { prepareRecord } from './analysis/prepare.js';
 import { ingestSubmission } from './analysis/ingest.js';
 import { adaptTranscript, assertTranscriptIdentity } from './hosts/index.js';
 import { applyDecision, type DecisionRequest } from './review/decide.js';
+import { candidateContent } from './review/content.js';
+import { candidateDetail } from './review/detail.js';
 import { approvalMetrics } from './review/metrics.js';
 import { allowedActions } from './domain/states.js';
-import { createPreview } from './publish/preview.js';
-import { publishCandidate } from './publish/publish.js';
-import { listReceipts, reconcileReceipts } from './publish/receipt.js';
-import { memoryContent } from './publish/memory.js';
-import { addTarget, loadTargetConfig, removeTarget } from './publish/targets.js';
 import { splitFrontmatter } from './store/frontmatter.js';
 import { RECORD_ID_PATTERN, assertSafeRecordId, canonicalWorkspace, resolvePaths } from './store/paths.js';
 import { assertSingleNotesSection } from './store/notes.js';
@@ -27,7 +24,7 @@ import { PENDING_COMMIT_MAX_BYTES } from './domain/limits.js';
 
 export const CLI_VERSION = '0.1.0';
 
-const COMMANDS = ['doctor', 'register', 'validate', 'prepare', 'ingest', 'review', 'publish'] as const;
+const COMMANDS = ['doctor', 'register', 'validate', 'prepare', 'ingest', 'review'] as const;
 type Command = (typeof COMMANDS)[number];
 
 export interface CliIo {
@@ -75,8 +72,6 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
         return await ingestCommand(parsed.values, parsed.positionals, io);
       case 'review':
         return await reviewCommand(parsed.values, parsed.positionals, io);
-      case 'publish':
-        return await publishCommand(parsed.values, parsed.positionals, io);
     }
   } catch (err) {
     return reportError(err, io);
@@ -128,18 +123,6 @@ function parseCommand(command: Command, args: string[]): ParsedArgs {
       scope: { type: 'string' },
       out: { type: 'string' },
     });
-  } else if (command === 'publish') {
-    Object.assign(options, {
-      candidate: { type: 'string' },
-      target: { type: 'string' },
-      'target-id': { type: 'string' },
-      preview: { type: 'string' },
-      'expected-revision': { type: 'string' },
-      'ttl-ms': { type: 'string' },
-      path: { type: 'string' },
-      display: { type: 'string' },
-      section: { type: 'string' },
-    });
   }
   const result = parseArgs({
     args,
@@ -148,8 +131,7 @@ function parseCommand(command: Command, args: string[]): ParsedArgs {
       command === 'validate' ||
       command === 'prepare' ||
       command === 'ingest' ||
-      command === 'review' ||
-      command === 'publish',
+      command === 'review',
     strict: true,
   });
   return { values: result.values as ParsedArgs['values'], positionals: [...result.positionals] };
@@ -212,24 +194,8 @@ async function doctorCommand(values: ParsedArgs['values'], io: CliIo): Promise<n
   checks.push({
     name: 'host_capabilities',
     status: 'warn',
-    detail: 'codex/claude/normalized transcript adapters implemented; host Hook payloads and scheduling are unverified until the M0 real-host probes finish',
+    detail: 'Phase 1: explicit session analysis, human review and text export. Use a new --data-root; legacy rule/publication records are unsupported. Hook and scheduling are not available.',
   });
-  const targets = await loadTargetConfig(paths).catch(() => undefined);
-  checks.push(
-    targets === undefined
-      ? { name: 'target_configuration', status: 'warn', detail: 'publish target whitelist is unreadable; fix config/targets.json' }
-      : targets.targets.length > 0
-        ? {
-            name: 'target_configuration',
-            status: 'ok',
-            detail: `${targets.targets.length} whitelisted publish target(s): ${targets.targets.map((t) => t.target_id).join(', ')}`,
-          }
-        : {
-            name: 'target_configuration',
-            status: 'warn',
-            detail: 'no publish targets whitelisted; publishing stays disabled until the user adds targets via `sca publish add-target`',
-          },
-  );
 
   const failed = checks.some((c) => c.status === 'fail');
   io.stdout(JSON.stringify({ ok: !failed, command: 'doctor', version: CLI_VERSION, checks }, null, 2));
@@ -455,6 +421,12 @@ async function reviewCommand(
   const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
   const action = getString(values, 'action');
 
+  if (action === undefined && getString(values, 'candidate') !== undefined) {
+    const detail = await candidateDetail(repo, id, getString(values, 'candidate')!);
+    io.stdout(JSON.stringify({ ok: true, command: 'review', record_id: id, ...detail }));
+    return 0;
+  }
+
   if (action === undefined) {
     const { analyze, candidates } = await repo.loadRecord(id);
     const doc = candidates.doc;
@@ -487,7 +459,7 @@ async function reviewCommand(
       throw new ScaError('schema_invalid', `${action} needs --candidate <id>`);
     }
     const out = getString(values, 'out');
-    const outcome = await memoryContent(repo, id, candidateId, action, out !== undefined ? { outPath: out } : {});
+    const outcome = await candidateContent(repo, id, candidateId, action, out !== undefined ? { outPath: out } : {});
     io.stdout(
       JSON.stringify({
         ok: true,
@@ -537,126 +509,6 @@ async function reviewCommand(
     }),
   );
   return 0;
-}
-
-async function publishCommand(
-  values: ParsedArgs['values'],
-  positionals: string[],
-  io: CliIo,
-): Promise<number> {
-  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
-  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
-  const sub = positionals[0];
-  switch (sub) {
-    case 'targets': {
-      const config = await loadTargetConfig(repo.paths);
-      io.stdout(JSON.stringify({ ok: true, command: 'publish', targets: config.targets }, null, 2));
-      return 0;
-    }
-    case 'add-target': {
-      const filePath = getString(values, 'path');
-      if (filePath === undefined) {
-        throw new ScaError('schema_invalid', 'publish add-target needs --path <file>');
-      }
-      const targetId = getString(values, 'target-id');
-      const display = getString(values, 'display');
-      const section = getString(values, 'section');
-      const entry = await addTarget(repo.paths, {
-        filePath,
-        ...(targetId !== undefined ? { targetId } : {}),
-        ...(display !== undefined ? { display } : {}),
-        ...(section !== undefined ? { section } : {}),
-      });
-      io.stdout(JSON.stringify({ ok: true, command: 'publish', entry }));
-      return 0;
-    }
-    case 'remove-target': {
-      const targetId = getString(values, 'target');
-      if (targetId === undefined) {
-        throw new ScaError('schema_invalid', 'publish remove-target needs --target <target_id>');
-      }
-      const removed = await removeTarget(repo.paths, targetId);
-      io.stdout(JSON.stringify({ ok: true, command: 'publish', removed }));
-      return 0;
-    }
-    case 'preview': {
-      const id = positionals[1];
-      if (id === undefined) {
-        throw new ScaError('schema_invalid', 'publish preview needs a <record_id>');
-      }
-      assertSafeRecordId(id);
-      const candidateId = getString(values, 'candidate');
-      if (candidateId === undefined) {
-        throw new ScaError('schema_invalid', 'publish preview needs --candidate <id>');
-      }
-      const target = getString(values, 'target');
-      const ttlRaw = getString(values, 'ttl-ms');
-      const ttlMs = ttlRaw === undefined ? undefined : Number.parseInt(ttlRaw, 10);
-      if (ttlRaw !== undefined && (ttlMs === undefined || Number.isNaN(ttlMs) || ttlMs <= 0)) {
-        throw new ScaError('schema_invalid', 'publish preview --ttl-ms must be a positive integer');
-      }
-      const outcome = await createPreview(repo, id, {
-        candidateId,
-        ...(target !== undefined ? { targetId: target } : {}),
-        ...(ttlMs !== undefined ? { ttlMs } : {}),
-      });
-      io.stdout(JSON.stringify({ ok: true, command: 'publish', duplicate: outcome.duplicate, preview: outcome.preview }));
-      return 0;
-    }
-    case 'commit': {
-      const id = positionals[1];
-      if (id === undefined) {
-        throw new ScaError('schema_invalid', 'publish commit needs a <record_id>');
-      }
-      assertSafeRecordId(id);
-      const candidateId = getString(values, 'candidate');
-      const previewId = getString(values, 'preview');
-      const expectedRevision = getPositiveInt(values, 'expected-revision');
-      if (candidateId === undefined || previewId === undefined || expectedRevision === undefined) {
-        throw new ScaError('schema_invalid', 'publish commit needs --candidate, --preview and --expected-revision');
-      }
-      const outcome = await publishCandidate(repo, id, {
-        candidate_id: candidateId,
-        preview_id: previewId,
-        expected_revision: expectedRevision,
-      });
-      io.stdout(
-        JSON.stringify({
-          ok: outcome.phase === 'published' || outcome.phase === 'unchanged',
-          command: 'publish',
-          record_id: id,
-          phase: outcome.phase,
-          revision: outcome.revision,
-          ...(outcome.publication_id !== undefined ? { publication_id: outcome.publication_id } : {}),
-          ...(outcome.already_published === true ? { already_published: true } : {}),
-          candidate: {
-            id: outcome.candidate.id,
-            status: outcome.candidate.status,
-            error: outcome.candidate.publication.error ?? null,
-          },
-        }),
-      );
-      return outcome.phase === 'published' || outcome.phase === 'unchanged' ? 0 : 1;
-    }
-    case 'receipts': {
-      const receipts = await listReceipts(repo.paths);
-      io.stdout(JSON.stringify({ ok: true, command: 'publish', receipts }, null, 2));
-      return 0;
-    }
-    case 'reconcile': {
-      const id = positionals[1];
-      if (id === undefined) {
-        throw new ScaError('schema_invalid', 'publish reconcile needs a <record_id>');
-      }
-      assertSafeRecordId(id);
-      const reports = await reconcileReceipts(repo, id);
-      const clean = reports.every((r) => r.outcome === 'retryable' || r.outcome === 'converged' || r.outcome === 'residue_cleared');
-      io.stdout(JSON.stringify({ ok: clean, command: 'publish', record_id: id, reports }, null, 2));
-      return clean ? 0 : 1;
-    }
-    default:
-      throw new ScaError('schema_invalid', 'publish needs targets|add-target|remove-target|preview|commit|receipts|reconcile');
-  }
 }
 
 interface RecordReport {
@@ -732,7 +584,7 @@ function describe(err: unknown): { code: string; detail: string } {
 
 const USAGE = `sca <command> [options]
 
-Commands (M1 slice):
+Commands (Phase 1):
   doctor    Diagnose node/PATH, data root writability, package and host capability matrix. No model calls.
   register  Create or reuse records/<record_id>/ skeletons for one session.
             --host codex|claude --session <id> --workspace <path> --transcript <path>
@@ -747,24 +599,16 @@ Commands (M1 slice):
             sca ingest <record_id> --run <run_id> [--submission <path|->] [--owner <who>]
   review    List candidates with allowed actions and approval metrics, or apply
             one human decision (idempotent via --request + --expected-revision).
-            sca review <record_id>
+            sca review <record_id> [--candidate <id>]  (candidate details and evidence)
             sca review <record_id> --action approve|reject|revoke|edit_content|supersede
               --candidate <id> --request <id> --expected-revision <n>
               [--note <text>] [--content-file <path|-> --title <t> --scope <s>
                --target-kind harness|memory [--harness-path <p>]]  (edit_content only)
             sca review <record_id> --action copy_content|export_content
-              --candidate <id> [--out <path>]                  (memory content, no sink)
-  publish Controlled harness publication (whitelist-gated, readback-verified).
-            sca publish targets
-            sca publish add-target --path <file> [--target-id <id>] [--display <name>] [--section <s>]
-            sca publish remove-target --target <target_id>
-            sca publish preview <record_id> --candidate <id> [--target <target_id>] [--ttl-ms <n>]
-            sca publish commit <record_id> --candidate <id> --preview <preview_id> --expected-revision <n>
-            sca publish receipts                                  (in-flight durable receipts)
-            sca publish reconcile <record_id>                     (converge crash residue)
+              --candidate <id> [--out <path>]                  (approved text only, no sink)
 
 Global: --data-root <path> (or SCA_DATA_ROOT; default ~/.session-correction-analysis)
-Prepared for later milestones: render, serve, drain.`;
+Phase 1: use a new data root. No automatic publishing, history search, HTTP or scheduling.`;
 
 async function readStdinText(): Promise<string> {
   return readBoundedText(process.stdin, PENDING_COMMIT_MAX_BYTES);

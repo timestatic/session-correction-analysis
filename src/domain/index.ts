@@ -6,6 +6,5 @@ export * from './snapshot.js';
 export * from './episodes.js';
 export * from './candidates.js';
 export * from './documents.js';
-export * from './rules.js';
 export * from './limits.js';
 export * from './states.js';

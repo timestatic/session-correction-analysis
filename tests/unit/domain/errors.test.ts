@@ -27,7 +27,7 @@ describe('error catalog', () => {
   });
 
   it('serializes ScaError into the shared error payload schema', () => {
-    const payload = new ScaError('target_changed', 'AGENTS.md').toPayload();
+    const payload = new ScaError('revision_conflict', 'AGENTS.md').toPayload();
     assert.equal(errorPayloadSchema.safeParse(payload).success, true);
     assert.equal(payload.retryable, true);
   });

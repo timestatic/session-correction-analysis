@@ -236,7 +236,6 @@ describe('approval metrics (design 29.4)', () => {
     assert.equal(metrics.revoked_pending, 1);
     assert.equal(metrics.superseded, 1);
     assert.equal(metrics.effective_memory, 1);
-    assert.equal(metrics.published, 0);
     assert.equal(metrics.approval_rate, 2 / 3);
     assert.equal(metrics.review_coverage, 3 / 5);
   });

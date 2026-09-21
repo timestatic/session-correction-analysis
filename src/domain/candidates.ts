@@ -4,7 +4,6 @@ import { candidateIdSchema, isoDateTimeSchema } from './ids.js';
 import { confidenceSchema, evidenceIdSchema } from './episodes.js';
 import { errorPayloadSchema } from './errors.js';
 import { sha256HashSchema } from './hash.js';
-import { ruleRefSchema } from './rules.js';
 
 export const candidateStatusSchema = z.enum([
   'proposed',
@@ -164,12 +163,6 @@ export const candidateSchema = z
     not_applicable: z.string().min(1).optional(),
     decision: decisionRecordSchema.nullable().default(null),
     decision_history: z.array(decisionRecordSchema).default([]),
-    /**
-     * Present once this candidate's approval has been adopted into the root
-     * registry. Absent means never adopted; the registry, not the candidate,
-     * owns the rule's later content and status (design 31.2).
-     */
-    rule_ref: ruleRefSchema.optional(),
     publication: publicationSchema.default({ published: false, attempts: [] }),
     needs_review: z
       .object({

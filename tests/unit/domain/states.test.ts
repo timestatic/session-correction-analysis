@@ -11,15 +11,14 @@ import {
   isEffective,
   isFormalCorrection,
   isFormalIntervention,
-  isPublishable,
 } from '../../../src/domain/states.js';
 
 describe('candidate status machine', () => {
   it('follows the single review workflow', () => {
     assert.deepEqual(allowedTransitions('proposed'), ['approved', 'rejected', 'superseded']);
     assert.equal(canTransition('proposed', 'published'), false);
-    assert.equal(canTransition('approved', 'published'), true);
-    assert.equal(canTransition('publish_failed', 'published'), true);
+    assert.equal(canTransition('approved', 'published'), false);
+    assert.equal(canTransition('publish_failed', 'published'), false);
     assert.equal(canTransition('published', 'proposed'), false);
     assert.deepEqual(allowedTransitions('superseded'), []);
   });
@@ -53,20 +52,17 @@ describe('allowed actions by target kind', () => {
     const actions = allowedActions(memory);
     assert.ok(actions.includes('copy_content'));
     assert.ok(actions.includes('export_content'));
-    assert.ok(!actions.includes('publish'));
-    assert.ok(!actions.includes('publish_preview'));
-    assert.equal(isPublishable(memory), false);
   });
 
-  it('harness approved candidates can preview then publish', () => {
+  it('harness approved candidates can copy and export text', () => {
     const harness = makeCandidate({ status: 'approved' });
-    assert.ok(allowedActions(harness).includes('publish_preview'));
-    assert.equal(isPublishable(harness), true);
+    assert.ok(allowedActions(harness).includes('copy_content'));
+    assert.ok(allowedActions(harness).includes('export_content'));
   });
 
-  it('unapproved candidates cannot publish', () => {
-    assert.ok(!allowedActions(makeCandidate({ status: 'proposed' })).includes('publish_preview'));
+  it('unapproved candidates cannot export', () => {
     assert.ok(!allowedActions(makeCandidate({ status: 'rejected' })).includes('approve'));
+    assert.ok(!allowedActions(makeCandidate({ status: 'proposed' })).includes('copy_content'));
   });
 });
 

@@ -25,7 +25,7 @@ import {
   type RunFence,
 } from './commit.js';
 import { atomicWriteText } from './atomic.js';
-import { parseMarkdownDoc, renderDocument, splitFrontmatter, validateSchema } from './frontmatter.js';
+import { assertPhase1Record, parseFrontmatterYaml, parseMarkdownDoc, renderDocument, splitFrontmatter, validateSchema } from './frontmatter.js';
 import { assertSingleNotesSection, composeBody, splitBody } from './notes.js';
 import { recordDir, resolvePaths, stripTrailingSep, type ScaPaths } from './paths.js';
 import { renderAnalyzeProjection, renderCandidatesProjection } from './render.js';
@@ -67,6 +67,35 @@ export class RecordRepository {
 
   constructor(rootDir?: string) {
     this.paths = resolvePaths(rootDir);
+  }
+
+  private async assertSupportedRecord(recordId: string): Promise<void> {
+    const registry = await fs.lstat(path.join(this.paths.root, 'accepted_rules.md')).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    const receipts = await fs.readdir(path.join(this.paths.runtimeDir, 'publications')).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+      throw error;
+    });
+    if (registry !== undefined || receipts.length > 0) {
+      throw new ScaError('unsupported_operation', 'Phase 1 cannot recover legacy rule/publication transactions; preserve this data root and use a new --data-root.');
+    }
+    for (const file of [this.analyzePath(recordId), this.candidatesPath(recordId)]) {
+      const text = await fs.readFile(file, 'utf8').catch((error: unknown) => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (text === undefined) continue;
+      let raw: unknown;
+      try { raw = parseFrontmatterYaml(splitFrontmatter(text).yamlText); }
+      catch (error) {
+        // Normal loaders/recovery retain their existing corruption error semantics.
+        if (error instanceof ScaError && error.code === 'schema_invalid') continue;
+        throw error;
+      }
+      assertPhase1Record(raw);
+    }
   }
 
   analyzePath(recordId: string): string {
@@ -114,6 +143,7 @@ export class RecordRepository {
     const recordId = computeRecordId(input.host, workspace, input.sessionId);
     const dir = recordDir(this.paths, recordId);
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await fs.mkdir(dir, { recursive: true });
       const analyzeExists = await exists(this.analyzePath(recordId));
       const candidatesExists = await exists(this.candidatesPath(recordId));
@@ -169,6 +199,7 @@ export class RecordRepository {
     mutate: (doc: AnalyzeDocument) => AnalyzeDocument,
   ): Promise<LoadedFile<AnalyzeDocument>> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await this.recoverUnderLock(recordId);
       const current = await this.loadAnalyze(recordId);
       assertExpected(current, expected);
@@ -187,6 +218,7 @@ export class RecordRepository {
     mutate: (doc: CandidatesDocument) => CandidatesDocument,
   ): Promise<LoadedFile<CandidatesDocument>> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await this.recoverUnderLock(recordId);
       const current = await this.loadCandidates(recordId);
       assertExpected(current, expected);
@@ -223,6 +255,7 @@ export class RecordRepository {
       | Promise<{ write: false; result: T } | { write: true; doc: CandidatesDocument; result: T }>,
   ): Promise<{ result: T; file: LoadedFile<CandidatesDocument> }> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await this.recoverUnderLock(recordId);
       const current = await this.loadCandidates(recordId);
       const outcome = await fn(current.doc);
@@ -245,6 +278,7 @@ export class RecordRepository {
   /** Acquire or renew the run lease; expired leases are taken over with generation+1. */
   async acquireLease(recordId: string, opts: { runId: string; owner: string; ttlMs: number; inputHash?: string }): Promise<Lease> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await this.recoverUnderLock(recordId);
       const { doc } = await this.loadAnalyze(recordId);
       const existing = doc.lease ?? null;
@@ -290,6 +324,7 @@ export class RecordRepository {
   /** Commit step 1: freeze the model result into analyze.md as pending_commit. */
   async beginCommit(recordId: string, fence: RunFence, payload: PendingPayload): Promise<PendingCommit> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       const { doc } = await this.loadAnalyze(recordId);
       assertFence(doc.lease, fence);
       if (doc.pending_commit !== null && doc.pending_commit !== undefined) {
@@ -317,6 +352,7 @@ export class RecordRepository {
   /** Commit step 2 (exposed separately so crash points stay testable). */
   async stageCandidates(recordId: string, fence: RunFence): Promise<void> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       const { doc } = await this.loadAnalyze(recordId);
       assertFence(doc.lease, fence);
       await this.stageFromPending(recordId, doc, requirePending(doc));
@@ -326,6 +362,7 @@ export class RecordRepository {
   /** Commit step 3: promote pending facts to the committed view and clear pending_commit. */
   async finalizeCommit(recordId: string, fence: RunFence): Promise<string> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       const { doc } = await this.loadAnalyze(recordId);
       assertFence(doc.lease, fence);
       const pending = requirePending(doc);
@@ -337,6 +374,7 @@ export class RecordRepository {
   /** Steps 2+3 in one lock section. */
   async applyCommit(recordId: string, fence: RunFence): Promise<string> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       const { doc } = await this.loadAnalyze(recordId);
       assertFence(doc.lease, fence);
       const pending = requirePending(doc);
@@ -352,6 +390,7 @@ export class RecordRepository {
     candidates: LoadedFile<CandidatesDocument>;
   }> {
     return withSessionLock(this.paths, recordId, async () => {
+      await this.assertSupportedRecord(recordId);
       await this.recoverUnderLock(recordId);
       return {
         analyze: await this.loadAnalyze(recordId),
@@ -365,6 +404,7 @@ export class RecordRepository {
   }
 
   private async recoverUnderLock(recordId: string): Promise<boolean> {
+    await this.assertSupportedRecord(recordId);
     const { doc } = await this.loadAnalyze(recordId);
     const pending = doc.pending_commit;
     if (pending === null || pending === undefined) {

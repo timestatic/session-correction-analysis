@@ -246,7 +246,6 @@ export async function applyDecision(
       );
     }
 
-    if (candidate.rule_ref !== undefined) throw new ScaError('unsupported_operation', `candidate already linked to ${candidate.rule_ref.rule_id}; rule lifecycle is not yet available, do not edit historical approval`);
     const updated = applyAction(candidate, request, now);
     const receipt: RequestReceipt = {
       request_id: request.request_id,

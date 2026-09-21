@@ -5,8 +5,6 @@ import { errorPayloadSchema } from './errors.js';
 import { episodeCommittedSchema, evidenceItemSchema, processedUserSchema } from './episodes.js';
 import { sha256HashSchema } from './hash.js';
 import { hostSchema, isoDateTimeSchema } from './ids.js';
-import { RULE_REVIEW_SNAPSHOT_MAX_RULES } from './limits.js';
-import { ruleObservationSchema, ruleReviewCoverageSchema, snapshotRuleSchema } from './rules.js';
 import { requestReceiptSchema } from './request.js';
 import { leaseSchema, runRecordSchema, snapshotSchema } from './snapshot.js';
 
@@ -61,51 +59,6 @@ export const pendingCommitSchema = z
   .strict();
 export type PendingCommit = z.infer<typeof pendingCommitSchema>;
 
-/**
- * What one session keeps from a rule review pass (design 31.2/31.6): the
- * minimal frozen snapshot of the rules it consulted plus the observations it
- * made. It lives beside, not inside, the analysis facts so re-running an
- * analysis cannot silently rewrite what an earlier snapshot already explained.
- */
-export const analyzeRuleReviewSchema = z
-  .object({
-    analysis_id: z.string().min(1),
-    snapshot_digest: sha256HashSchema,
-    rules_revision: z.number().int().positive(),
-    taken_at: isoDateTimeSchema,
-    coverage: ruleReviewCoverageSchema,
-    used_rules: z.array(snapshotRuleSchema).max(RULE_REVIEW_SNAPSHOT_MAX_RULES).default([]),
-    observations: z.array(ruleObservationSchema).default([]),
-  })
-  .strict()
-  .superRefine((review, ctx) => {
-    const issue = (path: [string, ...string[]], message: string): void => {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
-    };
-    const used = new Set(review.used_rules.map((rule) => rule.rule_id));
-    const seen = new Set<string>();
-    for (const observation of review.observations) {
-      if (!used.has(observation.rule_id)) {
-        issue(['observations'], 'an observation must reference a rule carried in used_rules');
-      }
-      if (observation.snapshot_digest !== review.snapshot_digest) {
-        issue(['observations'], 'every observation must carry the review snapshot_digest it was made against');
-      }
-      const key = `${observation.rule_id}|${observation.version}|${observation.episode_id ?? ''}`;
-      if (seen.has(key)) {
-        issue(['observations'], 'duplicate observation for the same rule version and episode');
-      }
-      seen.add(key);
-    }
-    for (const ruleId of review.coverage.considered) {
-      if (!used.has(ruleId)) {
-        issue(['coverage'], 'every considered/reviewed/skipped rule must appear in used_rules');
-        break;
-      }
-    }
-  });
-export type AnalyzeRuleReview = z.infer<typeof analyzeRuleReviewSchema>;
-
 export const analyzeDocumentSchema = z
   .object({
     schema: schemaIdSchema,
@@ -127,8 +80,6 @@ export const analyzeDocumentSchema = z
     lease: leaseSchema.nullable().optional(),
     pending_commit: pendingCommitSchema.nullable().optional(),
     facts: analyzeFactsSchema.optional(),
-    /** Rule review pass output for this analysis; never a second copy of global rule state. */
-    rule_review: analyzeRuleReviewSchema.optional(),
     extensions: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
