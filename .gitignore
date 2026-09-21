@@ -9,3 +9,6 @@
 
 # Root-level design/plan notes are kept local only
 /*.md
+
+# Agent skill packs stay local, not in the repo
+/.agents/
