@@ -1,0 +1,5 @@
+{"type":"meta","host":"codex","source_session_id":"norm_1","workspace":"/repo/demo","title":"规范化导入示例"}
+{"type":"event","kind":"user_message","id":"ev-1","turn_id":"t1","text":"这里之前理解错了，字段来源是流程变量","timestamp":"2026-09-01T10:00:00Z"}
+{"type":"event","kind":"assistant_message","id":"ev-2","turn_id":"t1","text":"明白，我将按流程变量来源修正。"}
+{"type":"event","kind":"file_edit","id":"ev-3","turn_id":"t1","call_id":"call-1","text":"--- a/src/x.ts\n+++ b/src/x.ts"}
+{"type":"event","kind":"tool_result","id":"ev-4","turn_id":"t1","call_id":"call-1","text":"ok"}

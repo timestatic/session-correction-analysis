@@ -1,0 +1,11 @@
+# Local real-session fixtures contain business code and private context.
+# Synthetic/public fixtures must be reviewed separately before tracking.
+/test-data/
+
+# Build output and local dependencies
+/node_modules/
+/dist/
+.DS_Store
+
+# Root-level design/plan notes are kept local only
+/*.md

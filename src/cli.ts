@@ -1,0 +1,787 @@
+#!/usr/bin/env node
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { parseArgs, type ParseArgsConfig } from 'node:util';
+
+import { triggerSchema } from './domain/documents.js';
+import { ScaError } from './domain/errors.js';
+import { hostSchema } from './domain/ids.js';
+import { prepareRecord } from './analysis/prepare.js';
+import { ingestSubmission } from './analysis/ingest.js';
+import { adaptTranscript, assertTranscriptIdentity } from './hosts/index.js';
+import { applyDecision, type DecisionRequest } from './review/decide.js';
+import { approvalMetrics } from './review/metrics.js';
+import { allowedActions } from './domain/states.js';
+import { createPreview } from './publish/preview.js';
+import { publishCandidate } from './publish/publish.js';
+import { listReceipts, reconcileReceipts } from './publish/receipt.js';
+import { memoryContent } from './publish/memory.js';
+import { addTarget, loadTargetConfig, removeTarget } from './publish/targets.js';
+import { splitFrontmatter } from './store/frontmatter.js';
+import { RECORD_ID_PATTERN, assertSafeRecordId, canonicalWorkspace, resolvePaths } from './store/paths.js';
+import { assertSingleNotesSection } from './store/notes.js';
+import { RecordRepository, type RegisterInput } from './store/repository.js';
+import { readBoundedFile, readBoundedText } from './store/bounded.js';
+import { PENDING_COMMIT_MAX_BYTES } from './domain/limits.js';
+
+export const CLI_VERSION = '0.1.0';
+
+const COMMANDS = ['doctor', 'register', 'validate', 'prepare', 'ingest', 'review', 'publish'] as const;
+type Command = (typeof COMMANDS)[number];
+
+export interface CliIo {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  stdout(line: string): void;
+  stderr(line: string): void;
+  /** Provided only for real process runs so tests never block on an open stdin. */
+  readStdin?(): Promise<string>;
+}
+
+type OptionValues = NonNullable<ParseArgsConfig['options']>;
+interface ParsedArgs {
+  values: Record<string, string | boolean | string[] | undefined>;
+  positionals: string[];
+}
+
+/**
+ * Exit codes: 0 success, 1 a diagnostic failed (doctor/validate report),
+ * 2 the command raised a catalogued ScaError, 3 usage/parsing error.
+ */
+export async function runCli(argv: readonly string[], io: CliIo): Promise<number> {
+  const [command, ...rest] = argv;
+  if (command === undefined || command === '--help' || command === '-h' || !isCommand(command)) {
+    io.stderr(USAGE);
+    return 3;
+  }
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseCommand(command, rest);
+  } catch (err) {
+    io.stderr(`usage error: ${err instanceof Error ? err.message : String(err)}`);
+    return 3;
+  }
+  try {
+    switch (command) {
+      case 'doctor':
+        return await doctorCommand(parsed.values, io);
+      case 'register':
+        return await registerCommand(parsed.values, io);
+      case 'validate':
+        return await validateCommand(parsed.values, parsed.positionals, io);
+      case 'prepare':
+        return await prepareCommand(parsed.values, parsed.positionals, io);
+      case 'ingest':
+        return await ingestCommand(parsed.values, parsed.positionals, io);
+      case 'review':
+        return await reviewCommand(parsed.values, parsed.positionals, io);
+      case 'publish':
+        return await publishCommand(parsed.values, parsed.positionals, io);
+    }
+  } catch (err) {
+    return reportError(err, io);
+  }
+}
+
+function isCommand(value: string): value is Command {
+  return (COMMANDS as readonly string[]).includes(value);
+}
+
+function parseCommand(command: Command, args: string[]): ParsedArgs {
+  const options: OptionValues = { 'data-root': { type: 'string' } };
+  if (command === 'register') {
+    Object.assign(options, {
+      host: { type: 'string' },
+      session: { type: 'string' },
+      workspace: { type: 'string' },
+      transcript: { type: 'string' },
+      trigger: { type: 'string' },
+      title: { type: 'string' },
+      project: { type: 'string' },
+      'analyzer-version': { type: 'string' },
+    });
+  } else if (command === 'validate') {
+    options['all'] = { type: 'boolean' };
+  } else if (command === 'prepare') {
+    Object.assign(options, {
+      owner: { type: 'string' },
+      'ttl-ms': { type: 'string' },
+      'rule-version': { type: 'string' },
+    });
+  } else if (command === 'ingest') {
+    Object.assign(options, {
+      run: { type: 'string' },
+      submission: { type: 'string' },
+      owner: { type: 'string' },
+    });
+  } else if (command === 'review') {
+    Object.assign(options, {
+      candidate: { type: 'string' },
+      action: { type: 'string' },
+      request: { type: 'string' },
+      'expected-revision': { type: 'string' },
+      note: { type: 'string' },
+      'content-file': { type: 'string' },
+      title: { type: 'string' },
+      'target-kind': { type: 'string' },
+      'harness-path': { type: 'string' },
+      scope: { type: 'string' },
+      out: { type: 'string' },
+    });
+  } else if (command === 'publish') {
+    Object.assign(options, {
+      candidate: { type: 'string' },
+      target: { type: 'string' },
+      'target-id': { type: 'string' },
+      preview: { type: 'string' },
+      'expected-revision': { type: 'string' },
+      'ttl-ms': { type: 'string' },
+      path: { type: 'string' },
+      display: { type: 'string' },
+      section: { type: 'string' },
+    });
+  }
+  const result = parseArgs({
+    args,
+    options,
+    allowPositionals:
+      command === 'validate' ||
+      command === 'prepare' ||
+      command === 'ingest' ||
+      command === 'review' ||
+      command === 'publish',
+    strict: true,
+  });
+  return { values: result.values as ParsedArgs['values'], positionals: [...result.positionals] };
+}
+
+function getString(values: ParsedArgs['values'], key: string): string | undefined {
+  const raw = values[key];
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+function reportError(err: unknown, io: CliIo): number {
+  if (err instanceof ScaError) {
+    io.stdout(JSON.stringify({ ok: false, error: err.toPayload() }));
+    return 2;
+  }
+  const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  io.stdout(
+    JSON.stringify({
+      ok: false,
+      error: { code: 'internal_error', message: detail, retryable: false, next_step: 'Report this failure.' },
+    }),
+  );
+  return 2;
+}
+
+interface Check {
+  name: string;
+  status: 'ok' | 'warn' | 'fail';
+  detail: string;
+}
+
+async function doctorCommand(values: ParsedArgs['values'], io: CliIo): Promise<number> {
+  const checks: Check[] = [];
+  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  checks.push({
+    name: 'node_version',
+    status: major === 24 ? 'ok' : 'fail',
+    detail: `process.versions.node=${process.versions.node}, required >=24 <25`,
+  });
+
+  const pathEntries = (io.env['PATH'] ?? '').split(path.delimiter).filter((entry) => entry.length > 0);
+  const reachable = await Promise.all(
+    pathEntries.map(async (dir) =>
+      fs
+        .access(path.join(dir, 'node'))
+        .then(() => true)
+        .catch(() => false),
+    ),
+  );
+  checks.push({
+    name: 'node_on_path',
+    status: reachable.includes(true) ? 'ok' : 'warn',
+    detail: `execPath=${process.execPath}; a node binary is ${reachable.includes(true) ? 'reachable' : 'missing'} on PATH (non-interactive installs rely on it; NVM upgrades can invalidate pinned paths)`,
+  });
+
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const paths = resolvePaths(root === undefined || root.length === 0 ? undefined : root);
+  checks.push(await dataRootCheck(paths.recordsDir, paths.runtimeDir));
+  checks.push(await packageCheck());
+  checks.push({
+    name: 'host_capabilities',
+    status: 'warn',
+    detail: 'codex/claude/normalized transcript adapters implemented; host Hook payloads and scheduling are unverified until the M0 real-host probes finish',
+  });
+  const targets = await loadTargetConfig(paths).catch(() => undefined);
+  checks.push(
+    targets === undefined
+      ? { name: 'target_configuration', status: 'warn', detail: 'publish target whitelist is unreadable; fix config/targets.json' }
+      : targets.targets.length > 0
+        ? {
+            name: 'target_configuration',
+            status: 'ok',
+            detail: `${targets.targets.length} whitelisted publish target(s): ${targets.targets.map((t) => t.target_id).join(', ')}`,
+          }
+        : {
+            name: 'target_configuration',
+            status: 'warn',
+            detail: 'no publish targets whitelisted; publishing stays disabled until the user adds targets via `sca publish add-target`',
+          },
+  );
+
+  const failed = checks.some((c) => c.status === 'fail');
+  io.stdout(JSON.stringify({ ok: !failed, command: 'doctor', version: CLI_VERSION, checks }, null, 2));
+  return failed ? 1 : 0;
+}
+
+async function dataRootCheck(recordsDir: string, runtimeDir: string): Promise<Check> {
+  try {
+    await fs.mkdir(recordsDir, { recursive: true });
+    await fs.mkdir(runtimeDir, { recursive: true });
+    const probe = path.join(runtimeDir, `doctor-probe-${process.pid}.tmp`);
+    await fs.writeFile(probe, 'probe', 'utf8');
+    await fs.unlink(probe);
+    return { name: 'data_root', status: 'ok', detail: `${path.dirname(recordsDir)} is writable` };
+  } catch (err) {
+    return {
+      name: 'data_root',
+      status: 'fail',
+      detail: `${path.dirname(recordsDir)} is not usable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+async function packageCheck(): Promise<Check> {
+  // dist/src/cli.js -> package.json sits two levels up; source runs keep working via cwd fallback.
+  const candidates = [
+    path.join(import.meta.dirname, '..', '..', 'package.json'),
+    path.join(process.cwd(), 'package.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, 'utf8');
+      const pkg = JSON.parse(raw) as { name?: string; version?: string };
+      const versionMatches = pkg.version === CLI_VERSION;
+      return {
+        name: 'package',
+        status: pkg.name === 'session-correction-analysis' && versionMatches ? 'ok' : 'warn',
+        detail: `name=${pkg.name ?? '?'}, version=${pkg.version ?? '?'}, CLI_VERSION=${CLI_VERSION}; release checksum manifests land with packaging (design 25.4)`,
+      };
+    } catch {
+      // try the next candidate
+    }
+  }
+  return { name: 'package', status: 'warn', detail: 'package.json not found next to the bundle' };
+}
+
+async function registerCommand(values: ParsedArgs['values'], io: CliIo): Promise<number> {
+  const hostResult = hostSchema.safeParse(getString(values, 'host'));
+  const sessionId = getString(values, 'session');
+  const workspace = getString(values, 'workspace');
+  const transcript = getString(values, 'transcript');
+  if (!hostResult.success || sessionId === undefined || workspace === undefined || transcript === undefined) {
+    throw new ScaError('schema_invalid', 'register requires --host codex|claude, --session, --workspace, --transcript');
+  }
+  const triggerResult = triggerSchema.safeParse(getString(values, 'trigger') ?? 'manual_skill');
+  if (!triggerResult.success) {
+    throw new ScaError('schema_invalid', 'register --trigger must be session_end|manual_skill|scheduled_drain|explicit_import');
+  }
+  const host = hostResult.data;
+  const trigger = triggerResult.data;
+  const transcriptPath = path.resolve(transcript);
+  try {
+    const stat = await fs.stat(transcriptPath);
+    if (!stat.isFile()) {
+      throw new ScaError('transcript_unreadable', `--transcript ${transcriptPath} is not a regular file`);
+    }
+  } catch (err) {
+    if (err instanceof ScaError) {
+      throw err;
+    }
+    throw new ScaError('transcript_unreadable', `--transcript ${transcriptPath} is missing or unreadable`);
+  }
+  // Verify the source identity before creating a record, not just its file format.
+  await assertTranscriptIdentity(await adaptTranscript(transcriptPath), { host, sessionId, workspace });
+
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+  const canonical = await canonicalWorkspace(workspace);
+  const title = getString(values, 'title');
+  const project = getString(values, 'project');
+  const input: RegisterInput = {
+    host,
+    canonicalWorkspace: canonical,
+    sessionId,
+    transcriptPath,
+    trigger,
+    analyzerVersion: getString(values, 'analyzer-version') ?? CLI_VERSION,
+    ...(title !== undefined ? { title } : {}),
+    ...(project !== undefined ? { projectName: project } : {}),
+  };
+  const result = await repo.register(input);
+  io.stdout(
+    JSON.stringify({
+      ok: true,
+      command: 'register',
+      record_id: result.recordId,
+      created: result.created,
+      analysis_status: result.analyze.doc.analysis_status,
+      record_dir: path.join(repo.paths.recordsDir, result.recordId),
+    }),
+  );
+  return 0;
+}
+
+async function prepareCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const id = positionals[0];
+  if (id === undefined) {
+    throw new ScaError('schema_invalid', 'prepare needs a <record_id>');
+  }
+  assertSafeRecordId(id);
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+  const ttlRaw = getString(values, 'ttl-ms');
+  const ttlMs = ttlRaw === undefined ? undefined : Number.parseInt(ttlRaw, 10);
+  if (ttlRaw !== undefined && (ttlMs === undefined || Number.isNaN(ttlMs) || ttlMs <= 0)) {
+    throw new ScaError('schema_invalid', 'prepare --ttl-ms must be a positive integer');
+  }
+  const ruleVersion = getString(values, 'rule-version');
+  const outcome = await prepareRecord(repo, id, {
+    owner: getString(values, 'owner') ?? 'cli',
+    ...(ttlMs !== undefined ? { ttlMs } : {}),
+    ...(ruleVersion !== undefined ? { ruleVersion } : {}),
+  });
+  io.stdout(
+    JSON.stringify({
+      ok: true,
+      command: 'prepare',
+      record_id: outcome.packet.record_id,
+      run_id: outcome.packet.run_id,
+      analysis_id: outcome.packet.analysis_id,
+      input_hash: outcome.packet.input_hash,
+      lease_generation: outcome.fence.generation,
+      lease_expires_at: outcome.lease.expires_at,
+      coverage: outcome.packet.snapshot.coverage,
+      evidence_count: outcome.packet.evidence.length,
+      user_message_count: outcome.packet.user_coverage.length,
+      blocks: outcome.packet.blocks.length,
+      existing_candidate_count: outcome.packet.existing_candidates.length,
+      changed_since_last_analysis: outcome.changed_since_last_analysis,
+      packet_path: outcome.packetPath,
+    }),
+  );
+  return 0;
+}
+
+async function ingestCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const id = positionals[0];
+  if (id === undefined) {
+    throw new ScaError('schema_invalid', 'ingest needs a <record_id>');
+  }
+  assertSafeRecordId(id);
+  const runId = getString(values, 'run');
+  if (runId === undefined) {
+    throw new ScaError('schema_invalid', 'ingest needs --run <run_id> returned by prepare');
+  }
+  const submissionPath = getString(values, 'submission') ?? '-';
+  let raw: string;
+  if (submissionPath === '-') {
+    if (io.readStdin === undefined) {
+      throw new ScaError('schema_invalid', 'no stdin in this context; pass --submission <path>');
+    }
+    raw = await io.readStdin();
+  } else {
+    raw = await readBoundedFile(path.resolve(submissionPath), PENDING_COMMIT_MAX_BYTES).catch((error: unknown) => {
+      if (error instanceof ScaError) throw error;
+      throw new ScaError('schema_invalid', `submission file ${submissionPath} is missing or unreadable`);
+    });
+  }
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+  const result = await ingestSubmission(repo, id, runId, raw, getString(values, 'owner') ?? 'cli');
+  io.stdout(JSON.stringify({ ok: true, command: 'ingest', ...result }));
+  return 0;
+}
+
+function getPositiveInt(values: ParsedArgs['values'], key: string): number | undefined {
+  const raw = getString(values, key);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n <= 0 || String(n) !== raw.trim()) {
+    throw new ScaError('schema_invalid', `${key} must be a positive integer`);
+  }
+  return n;
+}
+
+async function readContent(values: ParsedArgs['values'], io: CliIo): Promise<string | undefined> {
+  const file = getString(values, 'content-file');
+  if (file === undefined) {
+    return undefined;
+  }
+  if (file === '-') {
+    if (io.readStdin === undefined) {
+      throw new ScaError('schema_invalid', 'no stdin in this context; pass --content-file <path>');
+    }
+    return io.readStdin();
+  }
+  return fs.readFile(path.resolve(file), 'utf8').catch(() => {
+    throw new ScaError('schema_invalid', `content file ${file} is missing or unreadable`);
+  });
+}
+
+async function reviewCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const id = positionals[0];
+  if (id === undefined) {
+    throw new ScaError('schema_invalid', 'review needs a <record_id>');
+  }
+  assertSafeRecordId(id);
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+  const action = getString(values, 'action');
+
+  if (action === undefined) {
+    const { analyze, candidates } = await repo.loadRecord(id);
+    const doc = candidates.doc;
+    io.stdout(
+      JSON.stringify({
+        ok: true,
+        command: 'review',
+        record_id: id,
+        revision: doc.revision,
+        analysis_status: analyze.doc.analysis_status,
+        candidates: doc.candidates.map((c) => ({
+          id: c.id,
+          title: c.title,
+          status: c.status,
+          maturity: c.maturity,
+          target_kind: c.target.kind,
+          allowed_actions: allowedActions(c),
+          needs_review: c.needs_review !== undefined,
+          updated_at: c.updated_at,
+        })),
+        metrics: approvalMetrics(doc.candidates),
+      }),
+    );
+    return 0;
+  }
+
+  const candidateId = getString(values, 'candidate');
+  if (action === 'copy_content' || action === 'export_content') {
+    if (candidateId === undefined) {
+      throw new ScaError('schema_invalid', `${action} needs --candidate <id>`);
+    }
+    const out = getString(values, 'out');
+    const outcome = await memoryContent(repo, id, candidateId, action, out !== undefined ? { outPath: out } : {});
+    io.stdout(
+      JSON.stringify({
+        ok: true,
+        command: 'review',
+        record_id: id,
+        action,
+        content: outcome.content,
+        ...(outcome.exported_to !== undefined ? { exported_to: outcome.exported_to } : {}),
+      }),
+    );
+    return 0;
+  }
+  const requestId = getString(values, 'request');
+  const expectedRevision = getPositiveInt(values, 'expected-revision');
+  if (candidateId === undefined || requestId === undefined || expectedRevision === undefined) {
+    throw new ScaError('schema_invalid', 'review decide needs --candidate, --request and --expected-revision');
+  }
+  const content = await readContent(values, io);
+  const note = getString(values, 'note');
+  const title = getString(values, 'title');
+  const scope = getString(values, 'scope');
+  const targetKind = getString(values, 'target-kind');
+  const harnessPath = getString(values, 'harness-path');
+  const request: DecisionRequest = {
+    request_id: requestId,
+    candidate_id: candidateId,
+    action: action as DecisionRequest['action'],
+    expected_revision: expectedRevision,
+    ...(note !== undefined ? { note } : {}),
+    ...(content !== undefined ? { content } : {}),
+    ...(title !== undefined ? { title } : {}),
+    ...(scope !== undefined ? { scope } : {}),
+    ...(targetKind !== undefined
+      ? { target: targetKind === 'memory' ? { kind: 'memory' } : { kind: 'harness', ...(harnessPath !== undefined ? { path: harnessPath } : {}) } }
+      : {}),
+  };
+  const outcome = await applyDecision(repo, id, request);
+  io.stdout(
+    JSON.stringify({
+      ok: true,
+      command: 'review',
+      record_id: id,
+      receipt: outcome.receipt,
+      duplicate: outcome.duplicate,
+      revision: outcome.revision,
+      candidate: { id: outcome.candidate.id, status: outcome.candidate.status, title: outcome.candidate.title },
+    }),
+  );
+  return 0;
+}
+
+async function publishCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+  const sub = positionals[0];
+  switch (sub) {
+    case 'targets': {
+      const config = await loadTargetConfig(repo.paths);
+      io.stdout(JSON.stringify({ ok: true, command: 'publish', targets: config.targets }, null, 2));
+      return 0;
+    }
+    case 'add-target': {
+      const filePath = getString(values, 'path');
+      if (filePath === undefined) {
+        throw new ScaError('schema_invalid', 'publish add-target needs --path <file>');
+      }
+      const targetId = getString(values, 'target-id');
+      const display = getString(values, 'display');
+      const section = getString(values, 'section');
+      const entry = await addTarget(repo.paths, {
+        filePath,
+        ...(targetId !== undefined ? { targetId } : {}),
+        ...(display !== undefined ? { display } : {}),
+        ...(section !== undefined ? { section } : {}),
+      });
+      io.stdout(JSON.stringify({ ok: true, command: 'publish', entry }));
+      return 0;
+    }
+    case 'remove-target': {
+      const targetId = getString(values, 'target');
+      if (targetId === undefined) {
+        throw new ScaError('schema_invalid', 'publish remove-target needs --target <target_id>');
+      }
+      const removed = await removeTarget(repo.paths, targetId);
+      io.stdout(JSON.stringify({ ok: true, command: 'publish', removed }));
+      return 0;
+    }
+    case 'preview': {
+      const id = positionals[1];
+      if (id === undefined) {
+        throw new ScaError('schema_invalid', 'publish preview needs a <record_id>');
+      }
+      assertSafeRecordId(id);
+      const candidateId = getString(values, 'candidate');
+      if (candidateId === undefined) {
+        throw new ScaError('schema_invalid', 'publish preview needs --candidate <id>');
+      }
+      const target = getString(values, 'target');
+      const ttlRaw = getString(values, 'ttl-ms');
+      const ttlMs = ttlRaw === undefined ? undefined : Number.parseInt(ttlRaw, 10);
+      if (ttlRaw !== undefined && (ttlMs === undefined || Number.isNaN(ttlMs) || ttlMs <= 0)) {
+        throw new ScaError('schema_invalid', 'publish preview --ttl-ms must be a positive integer');
+      }
+      const outcome = await createPreview(repo, id, {
+        candidateId,
+        ...(target !== undefined ? { targetId: target } : {}),
+        ...(ttlMs !== undefined ? { ttlMs } : {}),
+      });
+      io.stdout(JSON.stringify({ ok: true, command: 'publish', duplicate: outcome.duplicate, preview: outcome.preview }));
+      return 0;
+    }
+    case 'commit': {
+      const id = positionals[1];
+      if (id === undefined) {
+        throw new ScaError('schema_invalid', 'publish commit needs a <record_id>');
+      }
+      assertSafeRecordId(id);
+      const candidateId = getString(values, 'candidate');
+      const previewId = getString(values, 'preview');
+      const expectedRevision = getPositiveInt(values, 'expected-revision');
+      if (candidateId === undefined || previewId === undefined || expectedRevision === undefined) {
+        throw new ScaError('schema_invalid', 'publish commit needs --candidate, --preview and --expected-revision');
+      }
+      const outcome = await publishCandidate(repo, id, {
+        candidate_id: candidateId,
+        preview_id: previewId,
+        expected_revision: expectedRevision,
+      });
+      io.stdout(
+        JSON.stringify({
+          ok: outcome.phase === 'published' || outcome.phase === 'unchanged',
+          command: 'publish',
+          record_id: id,
+          phase: outcome.phase,
+          revision: outcome.revision,
+          ...(outcome.publication_id !== undefined ? { publication_id: outcome.publication_id } : {}),
+          ...(outcome.already_published === true ? { already_published: true } : {}),
+          candidate: {
+            id: outcome.candidate.id,
+            status: outcome.candidate.status,
+            error: outcome.candidate.publication.error ?? null,
+          },
+        }),
+      );
+      return outcome.phase === 'published' || outcome.phase === 'unchanged' ? 0 : 1;
+    }
+    case 'receipts': {
+      const receipts = await listReceipts(repo.paths);
+      io.stdout(JSON.stringify({ ok: true, command: 'publish', receipts }, null, 2));
+      return 0;
+    }
+    case 'reconcile': {
+      const id = positionals[1];
+      if (id === undefined) {
+        throw new ScaError('schema_invalid', 'publish reconcile needs a <record_id>');
+      }
+      assertSafeRecordId(id);
+      const reports = await reconcileReceipts(repo, id);
+      const clean = reports.every((r) => r.outcome === 'retryable' || r.outcome === 'converged' || r.outcome === 'residue_cleared');
+      io.stdout(JSON.stringify({ ok: clean, command: 'publish', record_id: id, reports }, null, 2));
+      return clean ? 0 : 1;
+    }
+    default:
+      throw new ScaError('schema_invalid', 'publish needs targets|add-target|remove-target|preview|commit|receipts|reconcile');
+  }
+}
+
+interface RecordReport {
+  record_id: string;
+  ok: boolean;
+  analyze: { status: 'ok' | 'invalid'; code?: string; detail?: string; pending_commit?: string };
+  candidates: { status: 'ok' | 'invalid'; code?: string; detail?: string };
+}
+
+async function validateCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  const paths = resolvePaths(root === undefined || root.length === 0 ? undefined : root);
+  const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+
+  let ids: string[];
+  if (values['all'] === true) {
+    const entries = await fs.readdir(paths.recordsDir).catch(() => [] as string[]);
+    ids = entries.filter((entry) => RECORD_ID_PATTERN.test(entry)).sort();
+  } else {
+    if (positionals.length === 0) {
+      throw new ScaError('schema_invalid', 'validate needs a <record_id> or --all');
+    }
+    ids = [...positionals];
+  }
+
+  const reports: RecordReport[] = [];
+  for (const id of ids) {
+    reports.push(await validateRecord(repo, id));
+  }
+  const invalid = reports.filter((r) => !r.ok).length;
+  io.stdout(JSON.stringify({ ok: invalid === 0, command: 'validate', checked: reports.length, invalid, reports }, null, 2));
+  return invalid === 0 ? 0 : 1;
+}
+
+async function validateRecord(repo: RecordRepository, recordId: string): Promise<RecordReport> {
+  const report: RecordReport = {
+    record_id: recordId,
+    ok: true,
+    analyze: { status: 'ok' },
+    candidates: { status: 'ok' },
+  };
+  try {
+    const analyze = await repo.loadAnalyze(recordId);
+    if (analyze.doc.pending_commit !== null && analyze.doc.pending_commit !== undefined) {
+      // Read-only diagnostic: an open commit is reported, never replayed here.
+      report.analyze.pending_commit = analyze.doc.pending_commit.analysis_id;
+    }
+    assertSingleNotesSection(splitFrontmatter(await fs.readFile(repo.analyzePath(recordId), 'utf8')).body);
+  } catch (err) {
+    report.ok = false;
+    report.analyze = { status: 'invalid', ...describe(err) };
+  }
+  try {
+    await repo.loadCandidates(recordId);
+    assertSingleNotesSection(splitFrontmatter(await fs.readFile(repo.candidatesPath(recordId), 'utf8')).body);
+  } catch (err) {
+    report.ok = false;
+    report.candidates = { status: 'invalid', ...describe(err) };
+  }
+  return report;
+}
+
+function describe(err: unknown): { code: string; detail: string } {
+  if (err instanceof ScaError) {
+    return { code: err.code, detail: err.message };
+  }
+  return { code: 'internal_error', detail: err instanceof Error ? err.message : String(err) };
+}
+
+const USAGE = `sca <command> [options]
+
+Commands (M1 slice):
+  doctor    Diagnose node/PATH, data root writability, package and host capability matrix. No model calls.
+  register  Create or reuse records/<record_id>/ skeletons for one session.
+            --host codex|claude --session <id> --workspace <path> --transcript <path>
+            [--trigger session_end|manual_skill|scheduled_drain|explicit_import] [--title <t>]
+            [--project <name>] [--analyzer-version <v>]
+  validate  Read-only schema/identity/count checks over records.
+            sca validate <record_id> | sca validate --all
+  prepare   Freeze one session's input range, claim the run lease, write the
+            analysis packet to runtime/packets (no model calls here).
+            sca prepare <record_id> [--owner <who>] [--ttl-ms <n>] [--rule-version <v>]
+  ingest    Validate a submission JSON against the frozen packet and commit it.
+            sca ingest <record_id> --run <run_id> [--submission <path|->] [--owner <who>]
+  review    List candidates with allowed actions and approval metrics, or apply
+            one human decision (idempotent via --request + --expected-revision).
+            sca review <record_id>
+            sca review <record_id> --action approve|reject|revoke|edit_content|supersede
+              --candidate <id> --request <id> --expected-revision <n>
+              [--note <text>] [--content-file <path|-> --title <t> --scope <s>
+               --target-kind harness|memory [--harness-path <p>]]  (edit_content only)
+            sca review <record_id> --action copy_content|export_content
+              --candidate <id> [--out <path>]                  (memory content, no sink)
+  publish Controlled harness publication (whitelist-gated, readback-verified).
+            sca publish targets
+            sca publish add-target --path <file> [--target-id <id>] [--display <name>] [--section <s>]
+            sca publish remove-target --target <target_id>
+            sca publish preview <record_id> --candidate <id> [--target <target_id>] [--ttl-ms <n>]
+            sca publish commit <record_id> --candidate <id> --preview <preview_id> --expected-revision <n>
+            sca publish receipts                                  (in-flight durable receipts)
+            sca publish reconcile <record_id>                     (converge crash residue)
+
+Global: --data-root <path> (or SCA_DATA_ROOT; default ~/.session-correction-analysis)
+Prepared for later milestones: render, serve, drain.`;
+
+async function readStdinText(): Promise<string> {
+  return readBoundedText(process.stdin, PENDING_COMMIT_MAX_BYTES);
+}
+
+async function main(): Promise<void> {
+  const code = await runCli(process.argv.slice(2), {
+    env: process.env,
+    stdout: (line) => process.stdout.write(`${line}\n`),
+    stderr: (line) => process.stderr.write(`${line}\n`),
+    readStdin: readStdinText,
+  });
+  process.exitCode = code;
+}
+
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (invokedDirectly) {
+  await main();
+}

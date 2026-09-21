@@ -1,0 +1,6 @@
+{"type":"mode","mode":"normal","sessionId":"claude_fixture_1"}
+{"parentUuid":null,"isSidechain":false,"promptId":"p1","type":"user","message":{"role":"user","content":[{"type":"text","text":"检查 dpp_v3 第四批迁移的审批表单字段来源"}]},"uuid":"u1","timestamp":"2026-08-26T11:35:00.000Z","sessionId":"claude_fixture_1","cwd":"/repo/dpp_v3","version":"1.0.19","gitBranch":"feature_bpm"}
+{"parentUuid":"u1","isSidechain":false,"type":"assistant","message":{"role":"assistant","model":"claude-test","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"rg -n 'metricIds' src"}}],"usage":{"input_tokens":10,"output_tokens":5}},"uuid":"a1","timestamp":"2026-08-26T11:35:10.000Z","sessionId":"claude_fixture_1"}
+{"parentUuid":"a1","isSidechain":false,"type":"user","message":{"role":"user","content":[{"tool_use_id":"tu1","type":"tool_result","content":"src/a.ts:10: metricIds","is_error":false}]},"uuid":"u2","timestamp":"2026-08-26T11:35:12.000Z","sessionId":"claude_fixture_1"}
+{"parentUuid":"u2","isSidechain":false,"type":"assistant","message":{"role":"assistant","model":"claude-test","content":[{"type":"text","text":"字段来自流程变量，来源核对完成。"}],"usage":{"input_tokens":12,"output_tokens":8}},"uuid":"a2","timestamp":"2026-08-26T11:35:20.000Z","sessionId":"claude_fixture_1"}
+{"type":"last-prompt","leafUuid":"a2","sessionId":"claude_fixture_1"}
