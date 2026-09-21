@@ -1,9 +1,40 @@
 # session-correction-analysis (sca)
 
-显式分析 AI 编码会话（Codex / Claude Code）中的纠错内容，生成候选规则/笔记，经人工评审后导出 Markdown。CLI 在本机读取、校验和保存数据，不自行发起模型网络请求；语义分析由宿主 Agent 执行，是否联网取决于宿主配置。Phase 1 不做自动发布、不做历史搜索、无定时任务。
+AI 编码助手会在同一个坑里反复跌倒——你纠正过它，下次它照犯。sca 把这些口头纠错变成**带证据、经你人工批准**的规则候选，让它们沉淀回项目的 harness 文档（AGENTS.md / CLAUDE.md 等）或 Agent 长期记忆，形成"纠错一次、处处生效"的闭环：CLI 在本机读取、校验和保存数据，不自行发起模型网络请求；语义分析由宿主 Agent 执行，是否联网取决于宿主配置。**没有任何文本会在你批准前离开或生效**——批准之后才复制或导出为 Markdown，由你决定放进 harness 文档还是记忆。
+
+## 效果示例
+
+在 Claude Code / Codex 里说「分析这个会话的纠错」，Agent 会按技能引导跑完登记 → 冻结分析 → 提交，然后你逐个审核候选（`sca review <record_id>` 列出候选与可执行操作，`sca review <record_id> --candidate learning-001` 查看某条候选的证据详情）。
+
+approve 一条候选后 `copy_content` 导出，得到的 Markdown：
+
+```markdown
+# 接口校验统一用 zod schema，不手写散落的 if 校验
+
+## 规则正文
+
+新增或修改请求/响应校验时，统一用 zod schema 定义并复用 `src/domain/` 下的
+校验模式；错误经 ScaError 分类后以 JSON 输出。
+
+## 适用范围
+
+src/domain、src/analysis 的入参校验
+
+## 触发条件
+
+需要为 CLI 命令或 submission 增加字段校验时
+
+## 来源摘要
+
+类别 code_convention · 证据 3 条 · 来源 episode 2 个（明细见 learning_candidates.md）
+```
+
+每条候选都锚定会话里的具体纠错证据，可追溯、可撤销（revoke / supersede），不是模型的一面之词。批准后把这段 Markdown 放进对应章节的 AGENTS.md 或 Agent 记忆——下次会话中同类问题，AI 就不需要你再纠正第三遍。
 
 ## 特性
 
+- **本地优先、零副作用**：数据只存在你选定的本地目录，CLI 不发起模型网络请求，无自动发布、无外部 sink——导出是唯一出口，且必须先经你批准
+- **面向 harness 与记忆两条沉淀路径**：每条候选标注归属目标（`harness`：AGENTS.md / CLAUDE.md 等项目规范文档，可精确到文件与章节；`memory`：项目级或用户级 Agent 记忆），分析产出即知道该去往何处
 - **双主机适配**：读取并规范化 Codex / Claude Code 的会话 transcript（JSONL）
 - **可复现的分析管线**：`prepare` 冻结输入范围并生成 analysis packet（含证据、覆盖率、租约），分析结果通过 `ingest` 按 schema 校验后提交
 - **人工评审**：对候选执行 `approve / reject / revoke / edit_content / supersede`，基于 `--request + --expected-revision` 幂等，防止并发覆盖
@@ -15,6 +46,16 @@
 - Node.js `>=24 <25`（见 `.nvmrc`）
 
 ## 安装
+
+全局安装（提供 `sca` 命令）：
+
+```bash
+npm install -g session-correction-analysis
+```
+
+无需安装也可直接运行：`npx -y session-correction-analysis`。
+
+从源码安装：
 
 ```bash
 git clone https://github.com/timestatic/session-correction-analysis
@@ -28,9 +69,9 @@ npm run build
 ## 快速开始
 
 ```bash
-# 0. 首次试用选择一个尚不存在的独立目录，后续查看时继续使用同一路径
-#    如果该路径已有旧版数据，请换一个新路径，不要清空旧目录
-export SCA_DATA_ROOT="$HOME/.session-correction-analysis-phase1"
+# 0. 默认数据目录为 ~/.session-correction-analysis，一般无需配置
+#    如需隔离测试可另行指定：
+# export SCA_DATA_ROOT="$HOME/.session-correction-analysis"
 
 # 1. 环境自检（Node 版本、PATH、数据目录可写性）
 sca doctor
@@ -59,9 +100,25 @@ sca review <record_id> --action export_content \
 
 各命令的完整参数见 `sca`（无参数时输出 USAGE）。
 
+## 作为 Agent Skill 使用（Claude Code / Codex）
+
+技能是纯指令文件（薄 Skill），不自带任何打包代码；CLI 通过 `npx -y session-correction-analysis` 按需获取（首次需能访问 npm registry，之后走缓存），要求 Node.js 24。
+
+**安装技能**（二选一）：
+
+```bash
+# 方式一：skills.sh 一键安装
+npx skills add timestatic/session-correction-analysis
+
+# 方式二：手动复制本仓库 skills/session-correction-analysis/ 到
+#   ~/.claude/skills/（Claude Code 全局）或项目 .agents/skills/、~/.codex/skills/（Codex）
+```
+
+**使用**：安装后在 Claude Code / Codex 中说「分析这个会话的纠错」或调用 `/session-correction-analysis`，Agent 会按技能引导通过 npx 依次执行 `doctor → register → prepare →（分析 packet 产出 submission）→ ingest → review`；你只需在 review 阶段对每个候选做 approve / reject / 编辑后批准，已批准文本可复制或导出为 Markdown。分析记录全部保存在本地数据目录（见下节）。
+
 ## 数据目录
 
-记录默认存放在 `~/.session-correction-analysis/`（`records/` 记录、`runtime/` packet 与租约）。用 `--data-root <path>` 或环境变量 `SCA_DATA_ROOT` 覆盖。Phase 1 请使用全新的数据目录，旧版规则/发布记录不受支持。
+记录默认存放在 `~/.session-correction-analysis/`（`records/` 记录、`runtime/` packet 与租约）。用 `--data-root <path>` 或环境变量 `SCA_DATA_ROOT` 覆盖。旧版 rule_ref/rule_review 或发布状态记录不受支持，遇到会被拒绝且不自动迁移。
 
 ## 退出码
 
@@ -79,7 +136,6 @@ npm run lint          # ESLint
 npm run typecheck     # tsc 类型检查
 npm test              # 单元测试
 npm run test:integration   # 集成测试
-npm run package:skill      # 构建技能发布包
 ```
 
 目录结构：`src/hosts`（主机 transcript 适配）、`src/domain`（规范化模型与约束）、`src/analysis`（prepare/ingest/rework）、`src/store`（Markdown 存储、锁、原子提交）、`src/review`（评审决策、候选详情、文本输出）、`src/cli.ts`（命令行入口）、`tests/`（含合成 fixtures）。
