@@ -1,6 +1,8 @@
 # session-correction-analysis (sca)
 
-AI 编码助手会在同一个坑里反复跌倒——你纠正过它，下次它照犯。sca 把这些口头纠错变成**带证据、经你人工批准**的规则候选，让它们沉淀回项目的 harness 文档（AGENTS.md / CLAUDE.md 等）或 Agent 长期记忆，形成"纠错一次、处处生效"的闭环：CLI 在本机读取、校验和保存数据，不自行发起模型网络请求；语义分析由宿主 Agent 执行，是否联网取决于宿主配置。**没有任何文本会在你批准前离开或生效**——批准之后才复制或导出为 Markdown，由你决定放进 harness 文档还是记忆。
+> AI 编码时代的工程规范——把你对 Agent 的每一次纠正，变成带证据、经你批准、可撤销的规则，让项目的 harness 文档体系与 Agent 记忆持续可信、不随时间腐化。
+
+项目的 harness 文档体系——AGENTS.md / CLAUDE.md 入口、invariants / architecture / infrastructure 规范、linters、Agent 记忆——是 AI 编码助手的行为底座。但它会腐化：你在会话里纠正过 Agent 的东西，散落在一条条 transcript 里，没人记得、没人回收，同一个坑就反复跌倒；文档里则混进越来越没人遵守的旧条款。sca 把这个缺口做成一条工程闭环：CLI 在本机读取、校验和保存数据，不自行发起模型网络请求；语义分析由宿主 Agent 执行，是否联网取决于宿主配置。**没有任何文本会在你批准前离开或生效**——批准之后才复制或导出为 Markdown，由你决定回流到 harness 文档的哪一节，或放进 Agent 记忆。规则一旦采纳就进入持久账本：可追溯、可撤销、可修订，像代码一样被管理，而不是只增不减。
 
 ## 效果示例
 
@@ -29,11 +31,11 @@ src/domain、src/analysis 的入参校验
 类别 code_convention · 证据 3 条 · 来源 episode 2 个（明细见 learning_candidates.md）
 ```
 
-每条候选都锚定会话里的具体纠错证据，可追溯、可撤销（revoke / supersede），不是模型的一面之词。批准后把这段 Markdown 放进对应章节的 AGENTS.md 或 Agent 记忆——下次会话中同类问题，AI 就不需要你再纠正第三遍。
+每条候选都锚定会话里的具体纠错证据，可追溯、可撤销（revoke / supersede），不是模型的一面之词。批准后把这段 Markdown 回流到 harness 文档体系的对应章节（入口文件、invariants、infrastructure 规范……由你定落点）或 Agent 记忆——下次会话中同类问题，AI 就不需要你再纠正第三遍。
 
 ## 工作原理
 
-一次分析在 CLI（确定性的记账与校验）和宿主 Agent（语义判断）之间分工。手动调用 Skill、命令行、定时任务走的都是同一条链路、同一套 Markdown schema：
+sca 把 harness 的一条规则当作有生命周期的工件管理：**纠错 → 候选 → 批准 → 回流文档 → 落账 → 修订/撤销**。一次分析在 CLI（确定性的记账与校验）和宿主 Agent（语义判断）之间分工。手动调用 Skill、命令行、定时任务走的都是同一条链路、同一套 Markdown schema：
 
 ```text
 触发：人在会话里调用 Skill  /  你在宿主里自建的定时任务
@@ -64,7 +66,8 @@ sca adopt / sca rules ────────►  <data-root>/accepted_rules.md
 ## 特性
 
 - **本地优先、零副作用**：数据只存在你选定的本地目录，CLI 不发起模型网络请求，无自动发布、无外部 sink——导出是唯一出口，且必须先经你批准
-- **面向 harness 与记忆两条沉淀路径**：每条候选标注归属目标（`harness`：AGENTS.md / CLAUDE.md 等项目规范文档，可精确到文件与章节；`memory`：项目级或用户级 Agent 记忆），分析产出即知道该去往何处
+- **面向整个 harness 体系，不只入口文件**：每条候选标注归属目标（`harness`：AGENTS.md / CLAUDE.md 入口与 invariants / architecture / infrastructure 等规范文档，可精确到文件与章节；`memory`：项目级或用户级 Agent 记忆），分析产出即知道该回流到文档体系的哪一处
+- **可审计的规则账本**：批准即落账 `accepted_rules.md`——规则 ID、来源记录、修订历史与撤销回执全程留痕；harness 的每次变更都有据可查，旧规则能被修订和移除，而不是只增不减
 - **双主机适配**：读取并规范化 Codex / Claude Code 的会话 transcript（JSONL）
 - **返工佐证边界**：Codex 的直接 `apply_patch` 与可解析的顺序 `exec` 包装 `tools.apply_patch(...)` 可形成编辑信号；无法解析的混合或并发工具调用、缺失成功结果或文件路径时，返工维度报告 `unknown`，不据此宣称“没有返工”
 - **可复现的分析管线**：`prepare` 冻结输入范围并生成 analysis packet（含证据、覆盖率、租约），分析结果通过 `ingest` 按 schema 校验后提交
@@ -98,7 +101,25 @@ npm run build
 
 构建产物在 `dist/`，CLI 入口为 `dist/src/cli.js`（bin 名 `sca`）。可 `npm link` 后将 `sca` 作为全局命令使用，或直接 `node dist/src/cli.js`。
 
-## 快速开始
+## 作为 Agent Skill 使用（Claude Code / Codex，推荐）
+
+主用法是把技能装进宿主，让 Agent 替你跑完整条链路——你只负责在 review 阶段逐条批准。技能是纯指令文件（薄 Skill），不自带任何打包代码；CLI 通过 `npx -y session-correction-analysis` 按需获取（首次需能访问 npm registry，之后走缓存），要求 Node.js 22+。
+
+**安装技能**（二选一）：
+
+```bash
+# 方式一：skills.sh 一键安装
+npx skills add timestatic/session-correction-analysis
+
+# 方式二：手动复制本仓库 skills/session-correction-analysis/ 到
+#   ~/.claude/skills/（Claude Code 全局）或项目 .agents/skills/、~/.codex/skills/（Codex）
+```
+
+**使用**：安装后在 Claude Code / Codex 中说「分析这个会话的纠错」或调用 `/session-correction-analysis`，Agent 会按技能引导通过 npx 依次执行 `doctor →（discover 定位当前会话）→ register → prepare →（分析 packet 产出 submission）→ ingest → review`；宿主未暴露 session ID 时 Agent 会自动用 marker 探针定位，失败才请你输入 `/status` 粘贴。你只需在 review 阶段对每个候选做 approve / reject / 编辑后批准，已批准文本可复制或导出为 Markdown，回流进 harness 文档体系的对应章节或 Agent 记忆；明确要求时再 `sca adopt` 落账到跨会话采纳清单（见「快速开始」第 6 步）。分析记录全部保存在本地数据目录（见后文「数据目录」一节）。
+
+## 快速开始（手动 CLI）
+
+下面的命令就是技能在背后替你执行的同一套链路，供脚本化或想看清每步产物时使用：
 
 ```bash
 # 0. 默认数据目录为 ~/.session-correction-analysis，一般无需配置
@@ -148,22 +169,6 @@ sca rules --revoke <rule_id> --request <uuid> --expected-revision <registry revi
 同版本重复采纳也保存回执：规则内容、版本和历史不变，注册表修订号增加；同编号重试只回放原回执，不增加修订号，也不会恢复随后撤销的规则。根级采纳/撤销账本保留全部回执，不按数量截断；候选审核账本保持原有策略。旧回执通过规则历史校验来源，无需迁移；旧版未保存的重复采纳请求无法补回。
 
 各命令的完整参数见 `sca`（无参数时输出 USAGE）。
-
-## 作为 Agent Skill 使用（Claude Code / Codex）
-
-技能是纯指令文件（薄 Skill），不自带任何打包代码；CLI 通过 `npx -y session-correction-analysis` 按需获取（首次需能访问 npm registry，之后走缓存），要求 Node.js 22+。
-
-**安装技能**（二选一）：
-
-```bash
-# 方式一：skills.sh 一键安装
-npx skills add timestatic/session-correction-analysis
-
-# 方式二：手动复制本仓库 skills/session-correction-analysis/ 到
-#   ~/.claude/skills/（Claude Code 全局）或项目 .agents/skills/、~/.codex/skills/（Codex）
-```
-
-**使用**：安装后在 Claude Code / Codex 中说「分析这个会话的纠错」或调用 `/session-correction-analysis`，Agent 会按技能引导通过 npx 依次执行 `doctor →（discover 定位当前会话）→ register → prepare →（分析 packet 产出 submission）→ ingest → review`；宿主未暴露 session ID 时 Agent 会自动用 marker 探针定位，失败才请你输入 `/status` 粘贴。你只需在 review 阶段对每个候选做 approve / reject / 编辑后批准，已批准文本可复制或导出为 Markdown，明确要求时再 `sca adopt` 落账到跨会话采纳清单（见快速开始第 6 步）。分析记录全部保存在本地数据目录（见下节）。
 
 ## 数据目录
 
