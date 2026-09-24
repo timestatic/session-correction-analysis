@@ -382,6 +382,7 @@ async function prepareCommand(
     ...(ttlMs !== undefined ? { ttlMs } : {}),
     ...(ruleVersion !== undefined ? { ruleVersion } : {}),
   });
+  const analyzeDocBytes = (await fs.stat(repo.analyzePath(id))).size;
   io.stdout(
     JSON.stringify({
       ok: true,
@@ -396,6 +397,7 @@ async function prepareCommand(
       evidence_count: outcome.packet.evidence.length,
       largest_evidence_bytes: outcome.packet.evidence.reduce((max, item) => Math.max(max, Buffer.byteLength(item.excerpt, 'utf8')), 0),
       pending_limit_bytes: PENDING_COMMIT_MAX_BYTES,
+      analyze_doc_bytes: analyzeDocBytes,
       user_message_count: outcome.packet.user_coverage.length,
       blocks: outcome.packet.blocks.length,
       existing_candidate_count: outcome.packet.existing_candidates.length,
@@ -488,6 +490,10 @@ async function reviewCommand(
   const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
   const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
   const action = getString(values, 'action');
+
+  if (values['full'] === true && action === undefined && getString(values, 'candidate') === undefined) {
+    throw new ScaError('schema_invalid', 'review --full requires --candidate <id>');
+  }
 
   if (action === undefined && getString(values, 'candidate') !== undefined) {
     const detail = await candidateDetail(repo, id, getString(values, 'candidate')!);

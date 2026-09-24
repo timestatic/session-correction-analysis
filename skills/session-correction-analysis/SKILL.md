@@ -31,11 +31,12 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
 
 1. `sca prepare <record_id> [--owner skill]` — 输出 manifest（不含 transcript）。
    记下 `run_id`、`packet_path`、`coverage`。若返回 `lease_active`，说明已有分析在跑，停止。
+   manifest 的 `analyze_doc_bytes` 是持久 `analyze.md` 的当前字节数：该文档跨 run **只追加、无界增长**（每次 ingest 都会永久写入被引用证据的 excerpt、episode provenance 和一条 run 记录），不受 `pending_limit_bytes`（只管单次提交/pending 事务）约束。数值已很大时说明历史臃肿，本次再引用大块证据会让它继续膨胀，应只引用真正相关的证据。
 2. 读取 `packet_path` 指向的 JSON 包。逐块（`blocks`）阅读 `evidence`（每条有 `id`、`excerpt`、`kind`），
    对照 `user_coverage` 确保每条用户消息都被检视过，不只看关键词命中的片段。
    分析包只读，不得修改字段或重算摘要。v1 旧包或完整性错误须重新 prepare。
    包内可能还有确定性派生的辅助字段：
-   - `edit_signals`：每次可识别的 `file_edit`/`tool_result` 的路径、区域指纹与成败判定；纳入 v2 摘要，只有带已知路径的 `change` 且 `success:true` 可佐证已完成修改。Codex 支持直接 `apply_patch` 和可解析的顺序 `exec` 包装 `tools.apply_patch(...)`；无法可靠解析的混合或并发工具调用仍须记为证据不可用；
+   - `edit_signals`：每次可识别的 `file_edit`/`tool_result` 的路径、区域指纹与成败判定；纳入 v2 摘要，只有带已知路径的 `change` 且 `success:true` 可佐证已完成修改。Codex 支持直接 `apply_patch`，以及 `exec` 包装的 `tools.apply_patch(...)`——patch 正文无论是内联 JSON 字符串字面量，还是绑定到标识符的模板字符串/heredoc（`*** Begin Patch … *** End Patch` 带真实换行）都能解析；无法可靠恢复 patch 正文（如标识符在别处定义）或混合/并发工具调用仍须记为证据不可用；
    - `rework_hints`：同一文件上先后两次成功修改的配对提示（file=文件级重叠，region=修改行重叠）。
    提示只是提示——是否构成返工由你结合语义判断，不得照抄 hint 当作结论。
 3. 语义判断，三条独立结论（design 23.2）：

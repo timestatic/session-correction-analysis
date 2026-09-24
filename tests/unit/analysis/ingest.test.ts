@@ -254,7 +254,7 @@ describe('ingest submission validation (design 22.3)', () => {
     );
   });
 
-  it('rejects a stale runner whose lease was taken over by another run', async () => {
+  it('rejects a stale runner whose lease was taken over by another live run', async () => {
     const { repo, recordId } = await preparedRepo();
     const prepared = await prepareRecord(repo, recordId, { owner: 'skill', runId: 'run-old', ttlMs: 1 });
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -262,9 +262,9 @@ describe('ingest submission validation (design 22.3)', () => {
     assert.equal(prepared.packet.lease_generation, 0);
     const err = await expectError(
       () => ingestSubmission(repo, recordId, 'run-old', JSON.stringify(buildSubmission(prepared.packet))),
-      'lease_expired',
+      'lease_active',
     );
-    assert.match(err.message, /superseded/);
+    assert.match(err.message, /still holds a live lease/);
   });
 
   it('rejects an expired run without extending its lease, so a fresh prepare can take over', async () => {

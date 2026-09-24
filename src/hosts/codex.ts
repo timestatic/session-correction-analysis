@@ -48,18 +48,34 @@ function classifyCall(name: string | undefined): EventKind {
   return 'tool_call';
 }
 
+function isPatch(text: string): boolean {
+  return text.startsWith('*** Begin Patch\n') && text.trimEnd().endsWith('*** End Patch');
+}
+
+/**
+ * Recover the patch body from an exec call. Real Codex passes the patch either as a
+ * JSON string literal (apply_patch("...")) or as a variable bound to a template
+ * literal / heredoc, so the body appears with real newlines somewhere in the snippet.
+ * The apply_patch token is required to keep plain shell mentions as tool calls.
+ */
 function wrappedPatch(name: string | undefined, input: string): string | undefined {
-  if (name !== 'exec') return undefined;
-  const matches = [...input.matchAll(/(?:^|[;\n])\s*text\(\s*await\s+tools\.apply_patch\(\s*("(?:\\.|[^"\\])*")\s*\)\s*\)\s*;?/gs)];
-  const literal = matches.length === 1 ? matches[0]?.[1] : undefined;
-  if (literal === undefined) return undefined;
-  try {
-    const patch: unknown = JSON.parse(literal);
-    return typeof patch === 'string' && patch.startsWith('*** Begin Patch\n') && patch.trimEnd().endsWith('*** End Patch')
-      ? patch : undefined;
-  } catch {
-    return undefined;
+  if (name !== 'exec' || !input.includes('apply_patch')) return undefined;
+  const patches: string[] = [];
+  for (const match of input.matchAll(/tools\.apply_patch\(\s*("(?:\\.|[^"\\])*")\s*\)/g)) {
+    const literal = match[1];
+    if (literal === undefined) continue;
+    try {
+      const parsed: unknown = JSON.parse(literal);
+      if (typeof parsed === 'string' && isPatch(parsed) && !patches.includes(parsed)) patches.push(parsed);
+    } catch {
+      continue; // not a standalone JSON string literal; the newline-block pass below covers it
+    }
   }
+  for (const match of input.matchAll(/\*\*\* Begin Patch\n[\s\S]*?\n\*\*\* End Patch/g)) {
+    const block = match[0];
+    if (!patches.includes(block)) patches.push(block);
+  }
+  return patches.length > 0 ? patches.join('\n') : undefined;
 }
 
 /** Codex rollout.jsonl adapter: response_item is canonical; verified item_completed mirrors merge. */

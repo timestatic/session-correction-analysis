@@ -525,7 +525,10 @@ function ensureRunLease(
     return { runId: packet.run_id, generation };
   }
   if (lease !== null && lease !== undefined && lease.run_id !== packet.run_id) {
-    throw new ScaError('lease_expired', 'another run holds or has superseded the lease on this record; this packet is stale and its result is rejected');
+    if (!isLeaseExpired(lease)) {
+      throw new ScaError('lease_active', `run ${lease.run_id} still holds a live lease on this record; this packet is stale and its result is rejected`);
+    }
+    throw new ScaError('lease_expired', 'another run has superseded the lease on this record; this packet is stale and its result is rejected');
   }
   throw new ScaError('lease_expired', 'the prepared run no longer holds its original live lease; start a fresh prepared run');
 }
