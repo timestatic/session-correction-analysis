@@ -44,16 +44,19 @@ describe('codex adapter', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-  it('recognizes apply_patch passed as an identifier bound to a real-newline template literal', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-codex-tmpl-'));
+  it('recognizes apply_patch bound to a variable as an escaped JSON string literal (real Codex shape)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-codex-var-'));
     try {
       const file = path.join(dir, 'rollout.jsonl');
       const call = (id: string, input: string) => ({ type: 'response_item', payload: { type: 'custom_tool_call', id, call_id: id, name: 'exec', input } });
       const result = (id: string) => ({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: id, output: 'Script completed' } });
-      const snippet = (target: string, body: string): string =>
-        `const patch = \`*** Begin Patch\n*** Update File: ${target}\n@@\n-old\n+${body}\n*** End Patch\`;\ntext(await tools.apply_patch(patch));`;
+      // Mirror the rollout: the patch is a JSON string literal (escaped \n) bound to `patch`, then apply_patch(patch).
+      const snippet = (target: string, body: string): string => {
+        const literal = JSON.stringify(`*** Begin Patch\n*** Update File: ${target}\n@@\n-old\n+${body}\n*** End Patch`);
+        return `const patch = ${literal};\ntext(await tools.apply_patch(patch));`;
+      };
       const rows = [
-        { type: 'session_meta', payload: { id: 'tmpl', cwd: '/repo/test' } },
+        { type: 'session_meta', payload: { id: 'varform', cwd: '/repo/test' } },
         { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ text: '改这个文件' }] } },
         call('before', snippet('src/b.ts', 'first')), result('before'),
         { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ text: '方向不对，改回去' }] } },
@@ -64,7 +67,7 @@ describe('codex adapter', () => {
       const transcript = await adaptCodex(file);
       assert.deepEqual(transcript.events.filter((event) => event.kind === 'file_edit').map((event) => event.call_id), ['before', 'after']);
       assert.equal(transcript.events.find((event) => event.call_id === 'mention')?.kind, 'tool_call');
-      const packet = await buildPacket({ recordId: 'a'.repeat(64), runId: 'run-tmpl', analysisId: 'analysis-tmpl', transcriptPath: file, ruleVersion: 'test' });
+      const packet = await buildPacket({ recordId: 'a'.repeat(64), runId: 'run-var', analysisId: 'analysis-var', transcriptPath: file, ruleVersion: 'test' });
       assert.equal(packet.edit_signals?.filter((signal) => signal.role === 'change' && signal.success === true).length, 2);
       assert.deepEqual(packet.rework_hints?.[0]?.paths, ['src/b.ts']);
     } finally {

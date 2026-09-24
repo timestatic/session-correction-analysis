@@ -53,17 +53,19 @@ function isPatch(text: string): boolean {
 }
 
 /**
- * Recover the patch body from an exec call. Real Codex passes the patch either as a
- * JSON string literal (apply_patch("...")) or as a variable bound to a template
- * literal / heredoc, so the body appears with real newlines somewhere in the snippet.
- * The apply_patch token is required to keep plain shell mentions as tool calls.
+ * Recover the patch body from an exec call. Real Codex binds the patch to a
+ * variable — `const patch = "*** Begin Patch\n..."; text(await tools.apply_patch(patch))`
+ * — so the body is a JSON string literal with escaped newlines, not an argument to
+ * apply_patch. Scan every string literal that parses to a full patch; the required
+ * apply_patch token keeps plain shell mentions as tool calls. A real-newline block
+ * form (template literal / heredoc) is accepted as a fallback.
  */
 function wrappedPatch(name: string | undefined, input: string): string | undefined {
   if (name !== 'exec' || !input.includes('apply_patch')) return undefined;
   const patches: string[] = [];
-  for (const match of input.matchAll(/tools\.apply_patch\(\s*("(?:\\.|[^"\\])*")\s*\)/g)) {
-    const literal = match[1];
-    if (literal === undefined) continue;
+  for (const match of input.matchAll(/"(?:\\.|[^"\\])*"/g)) {
+    const literal = match[0];
+    if (!literal.includes('Begin Patch')) continue;
     try {
       const parsed: unknown = JSON.parse(literal);
       if (typeof parsed === 'string' && isPatch(parsed) && !patches.includes(parsed)) patches.push(parsed);
