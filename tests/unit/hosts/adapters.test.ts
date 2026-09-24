@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import { eventSchema } from '../../../src/domain/events.js';
 import { adaptClaude, adaptCodex, adaptNormalized, adaptTranscript, detectFormat } from '../../../src/hosts/index.js';
 import { ScaError } from '../../../src/domain/errors.js';
+import { buildPacket } from '../../../src/analysis/prepare.js';
 
 const REPO = path.join(import.meta.dirname, '../../../..');
 const FIXTURES = path.join(REPO, 'tests', 'fixtures');
@@ -16,6 +17,33 @@ function fixture(...parts: string[]): string {
 }
 
 describe('codex adapter', () => {
+  it('recognizes a standalone apply_patch wrapped in exec and keeps shell mentions as tool calls', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-codex-wrapper-'));
+    try {
+      const file = path.join(dir, 'rollout.jsonl');
+      const patch = (replacement: string): string => `*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+${replacement}\n*** End Patch`;
+      const call = (id: string, input: string) => ({ type: 'response_item', payload: { type: 'custom_tool_call', id, call_id: id, name: 'exec', input } });
+      const result = (id: string) => ({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: id, output: 'Script completed' } });
+      const rows = [
+        { type: 'session_meta', payload: { id: 'wrapped', cwd: '/repo/test' } },
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ text: '修改文件' }] } },
+        call('patch-before', `text(await tools.apply_patch(${JSON.stringify(patch('first'))}));`), result('patch-before'),
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ text: '方向不对，请改回' }] } },
+        call('patch-after', `text(await tools.apply_patch(${JSON.stringify(patch('second'))}));`), result('patch-after'),
+        call('patch-then-check', `text(await tools.apply_patch(${JSON.stringify(patch('third'))}));\ntext(await tools.exec_command({cmd:"git status --short"}));`), result('patch-then-check'),
+        call('mention', 'text(await tools.exec_command({cmd:"echo tools.apply_patch"}));'), result('mention'),
+      ];
+      fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+      const transcript = await adaptCodex(file);
+      assert.deepEqual(transcript.events.filter((event) => event.kind === 'file_edit').map((event) => event.call_id), ['patch-before', 'patch-after', 'patch-then-check']);
+      assert.equal(transcript.events.find((event) => event.call_id === 'mention')?.kind, 'tool_call');
+      const packet = await buildPacket({ recordId: 'a'.repeat(64), runId: 'run-wrapped', analysisId: 'analysis-wrapped', transcriptPath: file, ruleVersion: 'test' });
+      assert.equal(packet.edit_signals?.filter((signal) => signal.role === 'change' && signal.success === true).length, 3);
+      assert.deepEqual(packet.rework_hints?.[0]?.paths, ['src/a.ts']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('deduplicates verified mirrors, links call ids and validates every event', async () => {
     const t = await adaptCodex(fixture('codex', 'basic.jsonl'));
     assert.equal(t.host, 'codex');

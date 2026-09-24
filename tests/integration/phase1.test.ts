@@ -51,7 +51,9 @@ it('phase1 review shows provenance, edits/approves, exports once and retains dec
     const review = ['review', recordId, '--candidate', 'learning-001'];
     const detail = await cli(repo.paths.root, review);
     assert.match(detail, /修改前解释配置/);
-    assert.match(detail, /不要修改/);
+    assert.match(detail, /"issue_anchor":"explain-first"/);
+    assert.match(detail, /"quote":\{"text":"不要修改","truncated":false\}/);
+    assert.match(await cli(repo.paths.root, [...review, '--full']), /不要修改/);
     await cli(repo.paths.root, [...review, '--action', 'copy_content'], 2);
     const contentFile = path.join(root, 'edit.md');
     await fs.writeFile(contentFile, '只解释配置，修改前先征求明确授权');
@@ -72,7 +74,7 @@ it('phase1 review shows provenance, edits/approves, exports once and retains dec
     await ingestSubmission(repo, recordId, repeated.packet.run_id, JSON.stringify({ episodes: [], candidates: [],
       processed_users: repeated.packet.user_coverage.map(u => ({ evidence_id: u.evidence_id, status: 'reviewed' })) }));
     assert.deepEqual((await repo.loadCandidates(recordId)).doc.candidates, before.candidates.doc.candidates);
-    assert.match(await cli(repo.paths.root, review), /不要修改/);
+    assert.match(await cli(repo.paths.root, review), /"issue_anchor":"explain-first"/);
     await cli(repo.paths.root, ['publish', 'targets'], 3);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

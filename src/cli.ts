@@ -129,11 +129,11 @@ function parseCommand(command: Command, args: string[]): ParsedArgs {
     Object.assign(options, {
       run: { type: 'string' },
       submission: { type: 'string' },
-      owner: { type: 'string' },
     });
   } else if (command === 'review') {
     Object.assign(options, {
       candidate: { type: 'string' },
+      full: { type: 'boolean' },
       action: { type: 'string' },
       request: { type: 'string' },
       'expected-revision': { type: 'string' },
@@ -394,6 +394,8 @@ async function prepareCommand(
       lease_expires_at: outcome.lease.expires_at,
       coverage: outcome.packet.snapshot.coverage,
       evidence_count: outcome.packet.evidence.length,
+      largest_evidence_bytes: outcome.packet.evidence.reduce((max, item) => Math.max(max, Buffer.byteLength(item.excerpt, 'utf8')), 0),
+      pending_limit_bytes: PENDING_COMMIT_MAX_BYTES,
       user_message_count: outcome.packet.user_coverage.length,
       blocks: outcome.packet.blocks.length,
       existing_candidate_count: outcome.packet.existing_candidates.length,
@@ -433,7 +435,7 @@ async function ingestCommand(
   }
   const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
   const repo = new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
-  const result = await ingestSubmission(repo, id, runId, raw, getString(values, 'owner') ?? 'cli');
+  const result = await ingestSubmission(repo, id, runId, raw);
   io.stdout(JSON.stringify({ ok: true, command: 'ingest', ...result }));
   return 0;
 }
@@ -466,6 +468,13 @@ async function readContent(values: ParsedArgs['values'], io: CliIo): Promise<str
   });
 }
 
+function reviewExcerpt(value: string, maxLength: number): { text: string; truncated: boolean } {
+  const characters = Array.from(value);
+  return characters.length <= maxLength
+    ? { text: value, truncated: false }
+    : { text: characters.slice(0, maxLength).join(''), truncated: true };
+}
+
 async function reviewCommand(
   values: ParsedArgs['values'],
   positionals: string[],
@@ -482,7 +491,37 @@ async function reviewCommand(
 
   if (action === undefined && getString(values, 'candidate') !== undefined) {
     const detail = await candidateDetail(repo, id, getString(values, 'candidate')!);
-    io.stdout(JSON.stringify({ ok: true, command: 'review', record_id: id, ...detail }));
+    const provenance = values['full'] === true ? detail.provenance : {
+      status: detail.provenance.status,
+      episodes: detail.provenance.episodes.map((episode) => ({
+        id: episode.id,
+        anchor_event_id: episode.anchor_event_id,
+        issue_anchor: episode.issue_anchor,
+        correction: {
+          detected: episode.correction.detected,
+          ...(episode.correction.subtype === undefined ? {} : { subtype: reviewExcerpt(episode.correction.subtype, 120) }),
+          confidence: episode.correction.confidence,
+          prior_agent_behavior: episode.correction.prior_agent_behavior,
+          agent_behavior_after: episode.correction.agent_behavior_after,
+          explanation: reviewExcerpt(episode.correction.explanation, 500),
+          ...(episode.correction.rework === undefined ? {} : { rework: episode.correction.rework }),
+        },
+        intervention: {
+          detected: episode.intervention.detected,
+          ...(episode.intervention.kind === undefined ? {} : { kind: episode.intervention.kind }),
+          confidence: episode.intervention.confidence,
+          evidence: episode.intervention.evidence,
+          explanation: reviewExcerpt(episode.intervention.explanation, 500),
+        },
+        citations: episode.citations.map((citation) => ({
+          evidence_id: citation.evidence_id,
+          quote: reviewExcerpt(citation.quote, 240),
+        })),
+      })),
+      evidence: detail.provenance.evidence.map(({ id: evidenceId, kind }) => ({ id: evidenceId, kind })),
+      missing_ids: detail.provenance.missing_ids,
+    };
+    io.stdout(JSON.stringify({ ok: true, command: 'review', record_id: id, ...detail, provenance }));
     return 0;
   }
 
@@ -766,10 +805,11 @@ Commands (Phase 1):
             analysis packet to runtime/packets (no model calls here).
             sca prepare <record_id> [--owner <who>] [--ttl-ms <n>] [--rule-version <v>]
   ingest    Validate a submission JSON against the frozen packet and commit it.
-            sca ingest <record_id> --run <run_id> [--submission <path|->] [--owner <who>]
+            sca ingest <record_id> --run <run_id> [--submission <path|->]
   review    List candidates with allowed actions and approval metrics, or apply
             one human decision (idempotent via --request + --expected-revision).
-            sca review <record_id> [--candidate <id>]  (candidate details and evidence)
+            sca review <record_id> [--candidate <id>] [--full]
+              (candidate details, bounded analysis and quotes; --full includes stored excerpts)
             sca review <record_id> --action approve|reject|revoke|edit_content|supersede
               --candidate <id> --request <id> --expected-revision <n>
               [--note <text>] [--content-file <path|-> --title <t> --scope <s>

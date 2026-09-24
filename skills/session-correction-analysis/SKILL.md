@@ -35,7 +35,7 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    对照 `user_coverage` 确保每条用户消息都被检视过，不只看关键词命中的片段。
    分析包只读，不得修改字段或重算摘要。v1 旧包或完整性错误须重新 prepare。
    包内可能还有确定性派生的辅助字段：
-   - `edit_signals`：每次 `file_edit`/`tool_result` 的路径、区域指纹与成败判定；纳入 v2 摘要，只有 `success:true` 可佐证已完成修改；
+   - `edit_signals`：每次可识别的 `file_edit`/`tool_result` 的路径、区域指纹与成败判定；纳入 v2 摘要，只有带已知路径的 `change` 且 `success:true` 可佐证已完成修改。Codex 支持直接 `apply_patch` 和可解析的顺序 `exec` 包装 `tools.apply_patch(...)`；无法可靠解析的混合或并发工具调用仍须记为证据不可用；
    - `rework_hints`：同一文件上先后两次成功修改的配对提示（file=文件级重叠，region=修改行重叠）。
    提示只是提示——是否构成返工由你结合语义判断，不得照抄 hint 当作结论。
 3. 语义判断，三条独立结论（design 23.2）：
@@ -53,8 +53,8 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    - `prior_agent_behavior` 的事件必须早于锚点消息，`agent_behavior_after` 必须晚于；
    - 只有存在 `file_edit`/`tool_result` 证据时才能声明 rework `undone|replaced|fixed`；
    - 若包内存在 `edit_signals`（即本 Session 有编辑证据），rework.evidence 必须至少引用一个 change
-     信号的 evidence id，且锚点前后都要有 `success:true` 的有效修改；两侧修改路径已知时必须
-     有交集，否则会被 ingest 以佐证失败拒收。包内没有编辑证据时不要声明 rework，记录
+     信号的 evidence id，且锚点前后都要有 `success:true`、路径已知且有交集的有效修改，
+     否则会被 ingest 以佐证失败拒收。包内没有可佐证的编辑证据时不要声明 rework，记录
      在 explanation 说明证据不可用，rework 使用 unknown 或省略；仅有 shell 命令描述而无 patch/前后内容时同样如此；
    - 每个 episode 默认 0–2 个紧密相关候选，允许没有候选；候选的
      `source_episode_anchor` 必须是本次提交的某个 episode 的 anchor；同时填写
@@ -65,12 +65,12 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    - `schema_invalid` 且提示还有重提交额度 → 修正后仅重提一次；额度用尽则停止并报告，
      需要重新 prepare；
    - `evidence_not_found`/`citation_mismatch` → 事实错误，被拒收，不要靠重试"磨出"成功；
-   - `payload_too_large` → 提交 JSON 上限 256KiB（UTF-8 字节）；缩短冗余说明，但不能删除处理清单或必要证据来假装全覆盖。仍超限则停止报告。
+   - `payload_too_large` → 原始提交和展开后的 pending commit 各有 256KiB（UTF-8 字节）上限；prepare 的 `largest_evidence_bytes` 仅提示风险，不能预测最终 pending 大小。可缩短冗余说明并只引用真正相关的证据；不能修改冻结包、删除处理清单或必要证据来假装通过。若必要证据仍超限，停止并报告容量限制。
 
 ## 人工审核与文本输出
 
 1. ingest 成功后，记下并向用户提供 `record_id`。执行 `sca review <record_id>`，展示少量候选摘要；没有候选时如实说明，不为凑数量新增规则。
-2. 对展示或用户选择的候选，执行 `sca review <record_id> --candidate <id>`。读取完整正文、范围、revision 与 provenance，引用证据 ID 和最短必要原文；`incomplete/unavailable` 必须明确说明，不把来源缺失说成已核实。
+2. 对展示或用户选择的候选，执行 `sca review <record_id> --candidate <id>`。默认 provenance 保留分析判断、限长引文及证据 ID、类型，不回吐完整 transcript excerpt；读取完整正文、范围与 revision，引用证据 ID 和最短必要引文。`quote`/`explanation` 的 `truncated: true` 表示内容被截断，不得当作完整原文；`incomplete/unavailable` 必须明确说明，不把来源缺失说成已核实。仅在确需核对原始证据时显式追加 `--full`，并避免把完整输出转述给用户。
 3. 当前用户明确要求修改时，将正文写入临时 UTF-8 文件，执行：
 
    ```bash

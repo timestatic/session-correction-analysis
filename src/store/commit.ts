@@ -84,13 +84,14 @@ export function emptyCandidates(sessionId: string, pending: PendingCommit): Cand
   };
 }
 
-/** Over-limit payloads are rejected so the caller can shrink evidence; never silently truncated. */
+/** Measure the compact transaction before writing; never silently truncate evidence. */
 export function assertPendingWithinLimit(pending: PendingCommit): void {
   const size = Buffer.byteLength(stableStringify(pending), 'utf8');
   if (size > PENDING_COMMIT_MAX_BYTES) {
+    const evidenceBytes = Buffer.byteLength(stableStringify(pending.facts.evidence), 'utf8');
     throw new ScaError(
       'payload_too_large',
-      `pending commit is ${String(size)} bytes (limit ${String(PENDING_COMMIT_MAX_BYTES)}); shrink the evidence window`,
+      `pending commit is ${String(size)} bytes (limit ${String(PENDING_COMMIT_MAX_BYTES)}); unique cited evidence is ${String(evidenceBytes)} bytes. Do not edit the frozen packet or drop required evidence; report a capacity limit if necessary evidence alone cannot fit`,
     );
   }
 }

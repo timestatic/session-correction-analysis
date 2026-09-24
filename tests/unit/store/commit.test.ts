@@ -140,6 +140,7 @@ describe('two-file recoverable commit', () => {
     const again = await repo.loadRecord(recordId);
     assert.equal(again.candidates.doc.candidates.length, 1);
     assert.equal(again.analyze.doc.lease?.run_id, 'run-1');
+    assert.deepEqual(again.analyze.doc.facts?.candidate_sources[0]?.episodes.map((episode) => episode.id), ['ep-0123456789abcdef']);
   });
 
   it('a crash after step 2 finishes only step 3', async () => {

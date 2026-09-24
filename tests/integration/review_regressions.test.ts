@@ -67,6 +67,69 @@ it('retains approved candidate provenance across empty reanalysis and runtime de
   for (const id of loaded.candidates.doc.candidates[0]!.evidence) assert.ok(source.evidence.some((item) => item.id === id));
 });
 
+it('keeps transcript excerpts out of default candidate review and exposes them only with --full', async () => {
+  const privateExcerpt = 'https://internal.example/cooper/secret-' + 'x'.repeat(8000);
+  const { repo, recordId } = await setup(`不要改错文件，${privateExcerpt}`);
+  const prepared = await prepareRecord(repo, recordId, { owner: 'test', runId: 'run-review-output' });
+  const payload = submission(prepared.packet);
+  const anchor = prepared.packet.evidence.find((item) => item.kind === 'user_text' && item.excerpt.includes('不要'))!;
+  payload.episodes[0]!.correction.explanation = '分析者判断：纠正了修改对象。';
+  Object.assign(payload.episodes[0]!.correction, { rework: { outcome: 'unknown', evidence: [] } });
+  payload.episodes[0]!.citations[0]!.quote = anchor.excerpt;
+  await ingestSubmission(repo, recordId, prepared.packet.run_id, JSON.stringify(payload));
+  const review = async (full: boolean): Promise<string> => {
+    const output: string[] = [];
+    const code = await runCli(['review', recordId, '--candidate', 'learning-001', ...(full ? ['--full'] : []), '--data-root', repo.paths.root],
+      { env: {}, stdout: (line) => output.push(line), stderr: (line) => output.push(line) });
+    assert.equal(code, 0, output.join('\n'));
+    return output.join('\n');
+  };
+  const compact = await review(false);
+  assert.ok(!compact.includes(privateExcerpt));
+  assert.match(compact, /"status":"available"/);
+  assert.match(compact, /"issue_anchor":"wrong-file"/);
+  assert.match(compact, /分析者判断：纠正了修改对象/);
+  assert.match(compact, /"prior_agent_behavior":\[\]/);
+  assert.match(compact, /"outcome":"unknown"/);
+  assert.match(compact, /"quote":\{"text":"不要改错文件/);
+  assert.match(compact, /"truncated":true/);
+  assert.ok((await review(true)).includes(privateExcerpt));
+});
+
+it('commits small submissions with shared long evidence without inflating pending provenance', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sca-shared-evidence-'));
+  dirs.push(dir);
+  const transcript = path.join(dir, 'input.jsonl');
+  const rows = [{ type: 'meta', host: 'codex', source_session_id: 'shared', workspace: dir },
+    ...Array.from({ length: 12 }, (_, index) => ({ type: 'event', id: `u${index}`, kind: 'user_message', text: `证据 ${index}: ${'x'.repeat(8000)}` }))];
+  await fs.writeFile(transcript, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  const repo = new RecordRepository(path.join(dir, 'data'));
+  const { recordId } = await repo.register({ host: 'codex', sessionId: 'shared', canonicalWorkspace: dir,
+    transcriptPath: transcript, trigger: 'manual_skill', analyzerVersion: 'test' });
+  const prepared = await prepareRecord(repo, recordId, { owner: 'test', runId: 'run-shared' });
+  const users = prepared.packet.user_coverage.map((entry) => entry.evidence_id);
+  const anchor = prepared.packet.evidence.find((item) => item.id === users[0])!;
+  const payload = {
+    processed_users: users.map((evidence_id) => ({ evidence_id, status: 'reviewed' })),
+    episodes: [{ anchor_event_id: anchor.id, issue_anchor: 'shared-evidence',
+      correction: { detected: true, confidence: 'high', prior_agent_behavior: [], agent_behavior_after: [], explanation: '纠正了处理范围' },
+      intervention: { detected: false, confidence: 'high', evidence: [], explanation: '无' },
+      citations: [{ evidence_id: anchor.id, quote: '证据 0' }] }],
+    candidates: Array.from({ length: 4 }, (_, index) => ({ title: `规则 ${index}`, category: 'process', confidence: 'high',
+      proposed_content: `逐项检查 ${index}`, evidence: users, source_episode_anchor: anchor.id, source_issue_anchor: 'shared-evidence' })),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') < 30_000);
+  const result = await ingestSubmission(repo, recordId, prepared.packet.run_id, JSON.stringify(payload));
+  assert.equal(result.new_candidate_ids.length, 4);
+  const loaded = await repo.loadRecord(recordId);
+  assert.equal(loaded.analyze.doc.facts?.candidate_sources.length, 4);
+  assert.ok(loaded.analyze.doc.facts?.candidate_sources.every((source) => source.evidence.length === 12));
+  const rerun = await prepareRecord(repo, recordId, { owner: 'test', runId: 'run-shared-rerun' });
+  await ingestSubmission(repo, recordId, rerun.packet.run_id, JSON.stringify({ episodes: [], candidates: [],
+    processed_users: rerun.packet.user_coverage.map((entry) => ({ evidence_id: entry.evidence_id, status: 'reviewed' })) }));
+  assert.equal((await repo.loadAnalyze(recordId)).doc.facts?.candidate_sources.length, 4);
+});
+
 it('routes multiple issues exactly and rejects legacy ambiguous candidate anchors', async () => {
   const { repo, recordId } = await setup();
   const first = await prepareRecord(repo, recordId, { owner: 'test', runId: 'run-multi' });

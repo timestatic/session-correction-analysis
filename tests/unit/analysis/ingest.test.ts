@@ -267,7 +267,7 @@ describe('ingest submission validation (design 22.3)', () => {
     assert.match(err.message, /superseded/);
   });
 
-  it('rejects the same run once its expired lease bumps the generation', async () => {
+  it('rejects an expired run without extending its lease, so a fresh prepare can take over', async () => {
     const { repo, recordId } = await preparedRepo();
     const prepared = await prepareRecord(repo, recordId, { owner: 'skill', runId: 'run-same-old', ttlMs: 1 });
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -275,6 +275,10 @@ describe('ingest submission validation (design 22.3)', () => {
       () => ingestSubmission(repo, recordId, 'run-same-old', JSON.stringify(buildSubmission(prepared.packet))),
       'lease_expired',
     );
+    assert.deepEqual((await repo.loadAnalyze(recordId)).doc.lease, prepared.lease);
+    const fresh = await prepareRecord(repo, recordId, { owner: 'skill', runId: 'run-fresh' });
+    assert.equal(fresh.fence.generation, prepared.fence.generation + 1);
+    assert.equal(fresh.lease.run_id, 'run-fresh');
   });
 
   it('refuses packets that are missing or lack a lease generation', async () => {
@@ -519,6 +523,11 @@ describe('cli ingest', () => {
       out,
     };
   }
+
+  it('rejects the removed --owner option instead of silently ignoring it', async () => {
+    const cap = capture();
+    assert.equal(await runCli(['ingest', 'unused', '--run', 'run-1', '--owner', 'old'], cap.io), 3);
+  });
 
   it('runs the prepare → submission → ingest loop over stdin', async () => {
     const { repo, recordId, root } = await preparedRepo();

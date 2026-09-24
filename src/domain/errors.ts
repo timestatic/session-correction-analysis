@@ -88,9 +88,9 @@ export const ERROR_CODES = {
     nextStep: 'Report partial explicitly and keep it out of full-session statistics.',
   },
   payload_too_large: {
-    message: 'The submitted payload exceeds the frozen size limit.',
+    message: 'The submitted text or compact pending commit exceeds its size limit.',
     retryable: true,
-    nextStep: 'Shrink the evidence window and resubmit; never copy the full transcript.',
+    nextStep: 'Use only genuinely relevant citations and concise analysis text. Do not alter the frozen packet or drop required evidence; report a capacity limit if it still cannot fit.',
   },
   approval_missing: {
     message: 'The candidate is not approved in its current content version.',

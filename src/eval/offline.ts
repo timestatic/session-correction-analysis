@@ -564,7 +564,7 @@ export async function runOfflineReplay(root: string): Promise<ReplayOutcome> {
       };
     }
 
-    const manifest = await ingestSubmission(repo, recordId, packet.run_id, buildReplaySubmission(packet), 'offline-eval');
+    const manifest = await ingestSubmission(repo, recordId, packet.run_id, buildReplaySubmission(packet));
     const { doc: analyzeDoc } = await repo.loadAnalyze(recordId);
     const episodes = analyzeDoc.facts?.episodes ?? [];
     const predictions = predictionsFromEpisodes(episodes);

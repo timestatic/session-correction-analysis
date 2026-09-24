@@ -48,6 +48,20 @@ function classifyCall(name: string | undefined): EventKind {
   return 'tool_call';
 }
 
+function wrappedPatch(name: string | undefined, input: string): string | undefined {
+  if (name !== 'exec') return undefined;
+  const matches = [...input.matchAll(/(?:^|[;\n])\s*text\(\s*await\s+tools\.apply_patch\(\s*("(?:\\.|[^"\\])*")\s*\)\s*\)\s*;?/gs)];
+  const literal = matches.length === 1 ? matches[0]?.[1] : undefined;
+  if (literal === undefined) return undefined;
+  try {
+    const patch: unknown = JSON.parse(literal);
+    return typeof patch === 'string' && patch.startsWith('*** Begin Patch\n') && patch.trimEnd().endsWith('*** End Patch')
+      ? patch : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Codex rollout.jsonl adapter: response_item is canonical; verified item_completed mirrors merge. */
 export async function adaptCodex(filePath: string): Promise<NormalizedTranscript> {
   const stats: TranscriptStats = emptyStats();
@@ -108,16 +122,17 @@ export async function adaptCodex(filePath: string): Promise<NormalizedTranscript
         // Older/exported transcripts used input for function calls; arguments wins when present.
         const rawInput = kind === 'function_call' && payload.arguments !== undefined ? payload.arguments : payload.input;
         const input = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput ?? '');
+        const patch = wrappedPatch(payload.name, input);
         events.push(
           makeEvent(
             id,
-            classifyCall(payload.name),
+            patch === undefined ? classifyCall(payload.name) : 'file_edit',
             ordinal++,
             line.line,
             line.raw,
             record.timestamp,
             turnId,
-            input,
+            patch ?? input,
             payload.call_id,
           ),
         );

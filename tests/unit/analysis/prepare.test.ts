@@ -294,6 +294,8 @@ describe('cli prepare', () => {
     assert.equal(manifest['ok'], true);
     assert.equal(manifest['record_id'], recordId);
     assert.equal(manifest['user_message_count'], 1);
+    assert.ok(typeof manifest['largest_evidence_bytes'] === 'number');
+    assert.equal(manifest['pending_limit_bytes'], 262_144);
     assert.ok(typeof manifest['input_hash'] === 'string');
     assert.ok(!('evidence' in manifest), 'manifest must not carry evidence content');
     assert.ok(!JSON.stringify(manifest).includes('excerpt'));

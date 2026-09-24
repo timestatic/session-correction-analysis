@@ -53,7 +53,7 @@ it('rejects changed excerpts even if the attacker recomputes the packet digest',
 });
 
 it('requires real paired success on both sides of a correction, with overlapping paths', async () => {
-  for (const [results, secondPath, expected] of [[false, 'a.ts', /both sides/], [true, 'b.ts', /disjoint paths/]] as const) {
+  for (const [results, secondPath, expected] of [[false, 'a.ts', /both sides/], [true, 'b.ts', /overlapping path/], [true, '', /known overlapping path/]] as const) {
     const { repo, recordId, prepared } = await setup(results, secondPath);
     await assert.rejects(ingestSubmission(repo, recordId, prepared.packet.run_id, JSON.stringify(submission(prepared.packet))), expected);
   }

@@ -448,9 +448,28 @@ export class RecordRepository {
     pending: PendingCommit,
     owningRunId: string | undefined,
   ): Promise<void> {
+    const sources = new Map((doc.facts?.candidate_sources ?? []).map((source) => [source.candidate_id, source]));
+    for (const source of pending.facts.candidate_sources) {
+      if (!sources.has(source.candidate_id)) sources.set(source.candidate_id, source);
+    }
+    for (const candidate of pending.candidates) {
+      if (sources.has(candidate.id)) continue;
+      const episodes = pending.facts.episodes.filter((episode) => candidate.source_episodes.includes(episode.id));
+      const ids = new Set(candidate.evidence);
+      for (const episode of episodes) {
+        for (const id of [episode.anchor_event_id, ...episode.correction.prior_agent_behavior,
+          ...episode.correction.agent_behavior_after, ...(episode.correction.rework?.evidence ?? []),
+          ...episode.intervention.evidence, ...episode.citations.map((citation) => citation.evidence_id)]) ids.add(id);
+      }
+      sources.set(candidate.id, {
+        candidate_id: candidate.id,
+        episodes,
+        evidence: pending.facts.evidence.filter((item) => ids.has(item.id)),
+      });
+    }
     const next = validateSchema(analyzeDocumentSchema, {
       ...doc,
-      facts: pending.facts,
+      facts: { ...pending.facts, candidate_sources: [...sources.values()] },
       analysis_id: pending.analysis_id,
       analysis_status: 'completed',
       analyzed_at: new Date().toISOString(),

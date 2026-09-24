@@ -66,6 +66,7 @@ sca adopt / sca rules ────────►  <data-root>/accepted_rules.md
 - **本地优先、零副作用**：数据只存在你选定的本地目录，CLI 不发起模型网络请求，无自动发布、无外部 sink——导出是唯一出口，且必须先经你批准
 - **面向 harness 与记忆两条沉淀路径**：每条候选标注归属目标（`harness`：AGENTS.md / CLAUDE.md 等项目规范文档，可精确到文件与章节；`memory`：项目级或用户级 Agent 记忆），分析产出即知道该去往何处
 - **双主机适配**：读取并规范化 Codex / Claude Code 的会话 transcript（JSONL）
+- **返工佐证边界**：Codex 的直接 `apply_patch` 与可解析的顺序 `exec` 包装 `tools.apply_patch(...)` 可形成编辑信号；无法解析的混合或并发工具调用、缺失成功结果或文件路径时，返工维度报告 `unknown`，不据此宣称“没有返工”
 - **可复现的分析管线**：`prepare` 冻结输入范围并生成 analysis packet（含证据、覆盖率、租约），分析结果通过 `ingest` 按 schema 校验后提交
 - **人工评审**：对候选执行 `approve / reject / revoke / edit_content / supersede`，基于 `--request + --expected-revision` 幂等，防止并发覆盖
 - **纯本地 Markdown 存储**：所有记录为带 frontmatter 的 Markdown 文件，可直接阅读；`validate` 提供只读一致性检查
@@ -128,7 +129,8 @@ sca ingest <record_id> --run <run_id> --submission submission.json
 
 # 5. 人工评审
 sca review <record_id>                                  # 列出候选与允许的操作
-sca review <record_id> --candidate <id>                 # 查看候选详情与证据
+sca review <record_id> --candidate <id>                 # 查看候选判断、限长引文与证据 ID（默认不输出完整原文）
+sca review <record_id> --candidate <id> --full          # 显式查看完整来源证据原文
 sca review <record_id> --action approve \
   --candidate <id> --request <uuid> --expected-revision <n>
 sca review <record_id> --action export_content \

@@ -22,7 +22,7 @@ import {
 } from '../domain/episodes.js';
 import { sha256HashSchema } from '../domain/hash.js';
 import { computeCandidateFingerprint, computeEpisodeId, nextCandidateId, type CandidateId } from '../domain/ids.js';
-import { DEFAULT_LEASE_TTL_MS, INGEST_MAX_CORRECTIVE_RESUBMISSIONS, PENDING_COMMIT_MAX_BYTES } from '../domain/limits.js';
+import { INGEST_MAX_CORRECTIVE_RESUBMISSIONS, PENDING_COMMIT_MAX_BYTES } from '../domain/limits.js';
 import { assertTextBudget } from '../store/bounded.js';
 import { runRecordSchema, snapshotSchema, type Snapshot } from '../domain/snapshot.js';
 import type { RunFence } from '../store/commit.js';
@@ -349,10 +349,10 @@ function corroborateRework(
   const beforePaths = new Set(before.flatMap((signal) => signal.paths));
   const afterPaths = new Set(after.flatMap((signal) => signal.paths));
   const overlaps = [...beforePaths].some((target) => afterPaths.has(target));
-  if (beforePaths.size > 0 && afterPaths.size > 0 && !overlaps) {
+  if (beforePaths.size === 0 || afterPaths.size === 0 || !overlaps) {
     throw new ScaError(
       'schema_invalid',
-      `episode ${String(index)}: edits before and after the anchor touch disjoint paths; this is not the same reworked artifact (design 23.3)`,
+      `episode ${String(index)}: successful edits before and after the anchor need a known overlapping path; this is not a corroborated rework (design 23.3)`,
     );
   }
 }
@@ -509,13 +509,10 @@ function planCandidates(
   return { planned, skipped };
 }
 
-async function ensureRunLease(
-  repo: RecordRepository,
-  recordId: string,
+function ensureRunLease(
   doc: AnalyzeDocument,
   packet: PreparePacket,
-  owner: string,
-): Promise<RunFence> {
+): RunFence {
   const generation = packet.lease_generation ?? -1;
   const lease = doc.lease;
   if (
@@ -528,48 +525,20 @@ async function ensureRunLease(
     return { runId: packet.run_id, generation };
   }
   if (lease !== null && lease !== undefined && lease.run_id !== packet.run_id) {
-    throw new ScaError(
-      'lease_expired',
-      'another run holds or has superseded the lease on this record; this packet is stale and its result is rejected',
-    );
+    throw new ScaError('lease_expired', 'another run holds or has superseded the lease on this record; this packet is stale and its result is rejected');
   }
-  const renewed = await repo.acquireLease(recordId, {
-    runId: packet.run_id,
-    owner,
-    ttlMs: DEFAULT_LEASE_TTL_MS,
-  });
-  if (renewed.generation !== generation) {
-    throw new ScaError(
-      'lease_expired',
-      'this packet was prepared under an older lease generation; its runner is stale and its result is rejected',
-    );
-  }
-  return { runId: packet.run_id, generation: renewed.generation };
+  throw new ScaError('lease_expired', 'the prepared run no longer holds its original live lease; start a fresh prepared run');
 }
 
 function buildFacts(packet: PreparePacket, doc: AnalyzeDocument, episodes: EpisodeCommitted[], cited: Set<string>,
-  existing: readonly Candidate[], planned: readonly Candidate[], processed: SubmissionRoot['processed_users']): AnalyzeFacts {
+  processed: SubmissionRoot['processed_users']): AnalyzeFacts {
   const snapshot: Snapshot = processed === undefined ? { ...packet.snapshot, coverage: 'partial' } : packet.snapshot;
   const runs = doc.facts?.runs ?? [];
-  const sources = new Map((doc.facts?.candidate_sources ?? []).map((source) => [source.candidate_id, source]));
-  const preserve = (candidate: Candidate, pool: readonly EpisodeCommitted[], evidence: readonly EvidenceItem[]): void => {
-    if (sources.has(candidate.id)) return;
-    const related = pool.filter((episode) => candidate.source_episodes.includes(episode.id));
-    const ids = new Set(candidate.evidence);
-    for (const episode of related) {
-      for (const id of [episode.anchor_event_id, ...episode.correction.prior_agent_behavior,
-        ...episode.correction.agent_behavior_after, ...(episode.correction.rework?.evidence ?? []),
-        ...episode.intervention.evidence, ...episode.citations.map((citation) => citation.evidence_id)]) ids.add(id);
-    }
-    sources.set(candidate.id, { candidate_id: candidate.id, episodes: related, evidence: evidence.filter((item) => ids.has(item.id)) });
-  };
-  for (const candidate of existing) preserve(candidate, doc.facts?.episodes ?? [], doc.facts?.evidence ?? []);
-  for (const candidate of planned) preserve(candidate, episodes, packet.evidence);
   return {
     snapshot,
     episodes,
     evidence: packet.evidence.filter((item) => cited.has(item.id)),
-    candidate_sources: [...sources.values()],
+    candidate_sources: [],
     processed_users: processed ?? [],
     parse_errors: [],
     runs: runs.concat(
@@ -595,7 +564,6 @@ export async function ingestSubmission(
   recordId: string,
   runId: string,
   rawSubmission: string,
-  owner = 'ingest',
 ): Promise<IngestManifest> {
   assertTextBudget(rawSubmission, PENDING_COMMIT_MAX_BYTES);
   const bundle = await loadPacket(repo, recordId, runId);
@@ -649,7 +617,7 @@ export async function ingestSubmission(
     };
   }
 
-  const fence = await ensureRunLease(repo, recordId, doc, packet, owner);
+  const fence = ensureRunLease(doc, packet);
   if (pinnedHash !== packet.input_hash) {
     throw new ScaError('schema_invalid', 'prepare packet does not match the input digest pinned in the record');
   }
@@ -664,7 +632,7 @@ export async function ingestSubmission(
   );
   const candidatesView = await flagStaleCandidates(repo, recordId, candidates, packet);
   const { planned, skipped } = planCandidates(root.candidates, candidatesView.doc, anchorToEpisodeId, evidence, cited);
-  const facts = buildFacts(packet, doc, committed, cited, candidatesView.doc.candidates, planned, root.processed_users);
+  const facts = buildFacts(packet, doc, committed, cited, root.processed_users);
 
   await repo.beginCommit(recordId, fence, {
     analysisId: packet.analysis_id,
