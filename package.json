@@ -20,10 +20,10 @@
     "url": "git+https://github.com/timestatic/session-correction-analysis.git"
   },
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=22"
   },
   "scripts": {
-    "package:skill": "node packaging/build-skill.mjs",
+    "smoke:pkg": "npm run build && node packaging/smoke-package.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "build": "rm -rf dist/src dist/tests && tsc -p tsconfig.build.json",
     "clean": "rm -rf dist",
@@ -41,7 +41,6 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/proper-lockfile": "^4.1.4",
-    "esbuild": "^0.25.0",
     "eslint": "^9.0.0",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.0.0"

@@ -10,12 +10,12 @@ export const ERROR_CODES = {
   session_locator_unavailable: {
     message: 'The requested session cannot be located through the host index or registered records.',
     retryable: false,
-    nextStep: 'Provide the exact transcript file with --transcript <path>.',
+    nextStep: 'Ask the user to paste the host /status output; register with explicit --session and --transcript.',
   },
   location_conflict: {
-    message: 'Explicit --session and --transcript resolve to different sessions.',
+    message: 'The provided locators resolve to more than one session.',
     retryable: false,
-    nextStep: 'Pass only one locator, or correct it so both refer to the same session.',
+    nextStep: 'Never pick by recency; ask the user for the /status output and register one exact session.',
   },
   unsupported_transcript: {
     message: 'The native transcript format is not supported by any adapter yet.',

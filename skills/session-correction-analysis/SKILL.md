@@ -10,11 +10,22 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
 
 ## 前置
 
-- 要求 Node.js 24。CLI 入口：`npx -y session-correction-analysis`（首次运行从 npm registry 拉取并缓存，需要网络；下文 `sca` 都代表这个完整命令，不要求用户全局安装）。本地源码开发时入口为 `<node24> <项目目录>/dist/src/cli.js`。
+- 要求 Node.js 22+。CLI 入口：`npx -y session-correction-analysis`（首次运行从 npm registry 拉取并缓存，需要网络；下文 `sca` 都代表这个完整命令，不要求用户全局安装）。本地源码开发时入口为 `<node> <项目目录>/dist/src/cli.js`。
 - 首次使用先执行 `sca doctor`。本 Skill 提供显式会话分析、人工审核、复制和导出；不提供自动发布、独立规则管理、后续复查、HTML、Hook 或定时任务。
-- 只分析当前会话或用户明确指定的会话。宿主不能提供可核验的会话 ID、workspace 和 transcript path 时，要求用户明确提供，不猜测路径、不扫描全部历史。不要把会话标题当作会话 ID。
+- 只分析当前会话或用户明确指定的会话。会话 ID 必须可核验：不要把会话标题当作会话 ID，不要凭"最新文件"猜测，不要扫描全部历史。宿主没有直接给出会话信息时，走下文"定位当前会话（marker 探针）"协议；探针定位失败仍不可得时，请用户在宿主中输入 `/status` 并把拿到的 session ID 与 transcript 路径粘贴给你。
+- 批量例外（窄）：当且仅当用户自己编写的任务提示词明确授权批量分析时，可以批量处理：队列取 `records/*/analyze.md` 中 `analysis_status: pending` 的记录，宿主历史目录只在该提示词给定的时间窗内枚举，且只读 `session_meta` 行取 session ID 与 cwd。范围之外仍按上一条执行——不扩大扫描、不按"最近使用"挑会话；批量运行中一律不自动批准、不写 harness 或记忆。
 - 直接使用默认 data-root（`~/.session-correction-analysis`），下文命令不需要 `--data-root`，也不要向用户询问路径确认。仅当用户主动指定其他目录时才追加 `--data-root <path>` 并在后续所有命令保持一致。旧 rule_ref/rule_review 或发布状态会被拒绝，不迁移、不清空旧目录。
 - 若 record 尚未登记，先 `sca register --host <codex|claude> --session <id> --workspace <path> --transcript <path>`。
+
+## 定位当前会话（marker 探针）
+
+仅当宿主（Claude Code / Codex）没有向你提供可核验的 session ID / transcript 路径时使用：
+
+1. 在当前会话的 shell 里执行 `uuidgen | tr 'A-Z' 'a-z'`，把输出逐字记为 `<m>`。探针标记为 `sca-probe-<m>`，必须是字面量小写 UUIDv4；每次新生成，不缓存、不复用。
+2. 执行 `sca discover --host <codex|claude> --marker sca-probe-<m> --workspace <当前 workspace>`。该命令的字面文本会先被宿主写入本会话 transcript，discover 只在有界范围内匹配**命令文本**（不认工具输出里的回显），命中唯一即自证因果。有界范围：codex 为最近 24 小时内有写入的 rollout 文件（被恢复的旧会话仍留在旧日期目录，按写入时间剪枝，不按目录日期）；claude 为 workspace 推导的项目目录。
+3. 成功时返回 `session_id` 与 `transcript_path`（CLI 已校验 transcript 格式与 workspace 一致），直接用于 `sca register`，随后回到正常步骤。
+4. 返回 `session_locator_unavailable`（零命中）或 `location_conflict`（多命中）时，**不要**扩大扫描范围、不要挑修改时间最新的文件：降级为请用户在宿主打 `/status` 并粘贴 session ID 与 transcript 绝对路径，再手动 `sca register`。
+5. 用户直接指定了其他会话的 transcript 路径时，跳过本节，直接 `sca register`。
 
 ## 步骤
 
@@ -81,7 +92,27 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    sca review <record_id> --candidate <id> --action export_content --out <new-file.md>
    ```
 
-   导出不覆盖已有文件。target 为 harness 或 memory 都只输出文本，不直接改 AGENTS.md、CLAUDE.md 或任何记忆系统，不描述为已安装或生效。以后使用同一 data-root 和 record_id 查看审核结果；没有历史搜索或跨会话已批准清单。
+   导出不覆盖已有文件。target 为 harness 或 memory 都只输出文本，不直接改 AGENTS.md、CLAUDE.md 或任何记忆系统，不描述为已安装或生效。以后使用同一 data-root 和 record_id 查看审核结果；跨会话的采纳记录见下节，历史搜索仍未实现。
+
+## 采纳落账（accepted_rules.md）
+
+用户批准并在后续会话中明确说"这条加入已采纳清单/落账"时，用 adopt 把当前批准版本登记进 data-root 根级的 `accepted_rules.md`。落账只是记账与来源索引，仍不是发布：不改写任何 harness 文档或记忆系统。
+
+   ```bash
+   sca adopt <record_id> --candidate <id> --request <unique-request-id> --expected-revision <review 返回的 candidates revision> [--scope project|user]
+   ```
+
+- 前提：候选当前内容携带未撤销的 approve；改稿或 revoke 后批准失效，adopt 会被拒（`approval_missing`），需重新批准。
+- 每次新采纳或撤销操作在首次调用前生成并保留全局唯一的 `--request`（建议 UUID）；重试沿用原编号及全部参数，撤销后主动重新采纳使用新编号。时间戳不参与覆盖排序；同编号对应不同记录、操作或参数时返回 rejected。
+- 同版本重复采纳只新增回执，不改变规则内容、版本或历史；注册表 revision 会增加，同编号重试不增加。重试旧请求不会恢复后来撤销的规则。根级账本保留全部回执，旧版未保存的重复请求无法补回。`rule_id` 由 record_id+候选 id 派生，改稿重批后再次 adopt 会原地修订同一规则并 version+1，不产生副本。
+- 查看：`sca rules`（默认只列生效项；`--workspace <path>` 按项目过滤，`--all` 含已撤销）；`sca rules --rule <rule_id>` 读全文与来源。撤销：
+
+  ```bash
+  sca rules --revoke <rule_id> --request <unique-request-id> --expected-revision <sca rules 返回的 registry revision>
+  ```
+
+  撤销只改状态并保留决定历史，不删除记录。
+- 向用户报告时给出 rule_id 与所在文件路径；检查回执 result，不能把 rejected/stale/duplicate 说成新落账。
 
 ## 红线
 

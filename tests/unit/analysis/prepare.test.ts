@@ -102,6 +102,34 @@ describe('prepare edit signals (design 23.3)', () => {
   });
 });
 
+describe('prepare silent tool events', () => {
+  it('freezes empty-text events with a placeholder instead of failing the packet', async () => {
+    const dir = await tempDir('sca-prep-empty-');
+    const file = path.join(dir, 'silent.jsonl');
+    const lines = [
+      { type: 'session_meta', payload: { session_id: 'thr-silent', id: 'thr-silent', cwd: '/repo/silent' } },
+      {
+        type: 'response_item',
+        payload: { type: 'message', id: 'msg_u1', role: 'user', content: [{ type: 'input_text', text: '建个目录' }] },
+      },
+      { type: 'response_item', payload: { type: 'function_call', id: 'fc1', name: 'shell', arguments: '' } },
+      { type: 'response_item', payload: { type: 'function_call_output', id: 'fo1', call_id: 'fc1', output: '' } },
+    ];
+    await fs.writeFile(file, `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`, 'utf8');
+
+    const packet = await buildPacket({
+      recordId: 'rec-silent',
+      runId: 'run-silent',
+      analysisId: 'analysis-silent',
+      transcriptPath: file,
+      ruleVersion: '0.1.0',
+    });
+    const silent = packet.evidence.filter((item) => item.kind === 'tool_call' || item.kind === 'tool_result');
+    assert.equal(silent.length, 2);
+    assert.ok(silent.every((item) => item.excerpt === '(no text)'));
+  });
+});
+
 /** Independent mirror of the integrity fields; volatile run/time metadata is excluded. */
 function expectedPacketHash(packet: PreparePacket): Sha256Hash {
   return stableHash({

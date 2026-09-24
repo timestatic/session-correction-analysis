@@ -28,6 +28,7 @@ import { atomicWriteText } from './atomic.js';
 import { assertPhase1Record, parseFrontmatterYaml, parseMarkdownDoc, renderDocument, splitFrontmatter, validateSchema } from './frontmatter.js';
 import { assertSingleNotesSection, composeBody, splitBody } from './notes.js';
 import { recordDir, resolvePaths, stripTrailingSep, type ScaPaths } from './paths.js';
+import { assertCompatibleRulesRegistry } from './registry.js';
 import { renderAnalyzeProjection, renderCandidatesProjection } from './render.js';
 import { withSessionLock } from './lock.js';
 
@@ -70,15 +71,14 @@ export class RecordRepository {
   }
 
   private async assertSupportedRecord(recordId: string): Promise<void> {
-    const registry = await fs.lstat(path.join(this.paths.root, 'accepted_rules.md')).catch((error: unknown) => {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
-      throw error;
-    });
+    // accepted_rules.md is Phase 1 business data now (design 31.2 lightweight
+    // adoption ledger): a v1 registry coexists, anything else keeps the fence.
+    await assertCompatibleRulesRegistry(this.paths);
     const receipts = await fs.readdir(path.join(this.paths.runtimeDir, 'publications')).catch((error: unknown) => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
       throw error;
     });
-    if (registry !== undefined || receipts.length > 0) {
+    if (receipts.length > 0) {
       throw new ScaError('unsupported_operation', 'Phase 1 cannot recover legacy rule/publication transactions; preserve this data root and use a new --data-root.');
     }
     for (const file of [this.analyzePath(recordId), this.candidatesPath(recordId)]) {

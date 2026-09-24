@@ -33,5 +33,5 @@ git push && git push --tags
 - 发布内容仅含 `files` 白名单：`dist/src`、`README.md`、`LICENSE`；新增运行时代码若发布依赖，需同步确认 `files` 覆盖
 - SKILL.md 中的命令入口必须保持 `npx -y session-correction-analysis` 写法，版本兼容由 CLI 的 packet schema / strict 校验兜底；改 CLI 命令或参数时同步更新 SKILL.md 与 README
 - `npm publish` 是对外不可逆操作：Agent 执行前必须先获得用户明确确认
-- 验证发布产物可用 `npm pack --dry-run`，不需要真实发布
-- 待清理：`packaging/build-skill.mjs` 与 `package:skill` 脚本属于旧"厚 Skill"（自包含 tar.gz）路线，模式 A 下不再发布；其 esbuild 冒烟测试逻辑仍有价值，清理时建议改造为 npx 安装验证脚本或保留 CI 冒烟，勿直接手敲删除
+- 验证发布产物用 `npm run smoke:pkg`（`packaging/smoke-package.mjs`：真实 `npm pack` → 装进临时 prefix → 用装出来的 `sca` bin 跑 doctor→register→prepare→ingest→review→edit/approve→copy/export→adopt/rules/revoke→validate 全链路，临时目录用完即删）。它需要联网装依赖，属手动/CI 命令，不进本地提交门禁。只想看打包清单用 `npm pack --dry-run`，不需要真实发布
+- 厚 Skill（自包含 tar.gz + esbuild bundle）路线已废弃并删除 `packaging/build-skill.mjs`；其全链路冒烟价值已转移到上面的 `smoke:pkg`，不要再引入独立发布产物

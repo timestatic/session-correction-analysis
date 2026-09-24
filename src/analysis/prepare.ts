@@ -139,7 +139,9 @@ function evidenceKindFor(event: Event): EvidenceKind {
 }
 
 function excerptFor(event: Event): { excerpt: string; truncated: boolean } {
-  const text = event.text ?? '(no text)';
+  // Hosts write "" for silent tool results; the packet schema forbids empty excerpts.
+  const raw = event.text;
+  const text = raw === undefined || raw.trim() === '' ? '(no text)' : raw;
   if (text.length > PREPARE_EVENT_MAX_TEXT_CHARS) {
     return { excerpt: `${text.slice(0, PREPARE_EVENT_MAX_TEXT_CHARS)}…[TRUNCATED]`, truncated: true };
   }

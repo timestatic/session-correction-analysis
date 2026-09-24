@@ -1,6 +1,7 @@
 import type { Candidate, CandidateStatus } from '../domain/candidates.js';
 import type { AnalyzeDocument, CandidatesDocument } from '../domain/documents.js';
 import type { EpisodeCommitted } from '../domain/episodes.js';
+import type { AcceptedRule, AcceptedRulesDocument } from '../domain/rules.js';
 import {
   hasReworkEvidence,
   isFormalCorrection,
@@ -209,6 +210,47 @@ function renderCandidate(candidate: Candidate): string {
   }
   if (candidate.needs_review !== undefined) {
     lines.push(bullet('需要复核', candidate.needs_review.reason));
+  }
+  return lines.join('\n');
+}
+
+const RULE_STATUS_LABELS: Record<AcceptedRule['status'], string> = {
+  active: '生效',
+  revoked: '已撤销',
+};
+
+export function renderAcceptedRulesProjection(doc: AcceptedRulesDocument): string {
+  const lines: string[] = [
+    '# 已采纳规则',
+    '',
+    'frontmatter 为权威状态，本正文是每次重写的只读视图；人工阅读用，勿在此文件外另建副本。',
+    `注册表修订号：${String(doc.revision)}`,
+    '',
+  ];
+  if (doc.rules.length === 0) {
+    lines.push('（尚无已采纳规则）', '');
+  }
+  for (const rule of doc.rules) {
+    lines.push(`## ${rule.rule_id}：${text(rule.title)}`, '');
+    lines.push(bullet('状态', RULE_STATUS_LABELS[rule.status]));
+    lines.push(
+      bullet('归属', rule.scope.kind === 'user' ? 'user（全局）' : `project：${rule.scope.canonical_workspace}`),
+    );
+    lines.push(bullet('版本', `v${String(rule.version)}`));
+    lines.push(bullet('目标', rule.target_kind));
+    lines.push(bullet('来源', `record ${rule.source.record_id} / ${rule.source.candidate_id}`));
+    lines.push(bullet('采纳时间', rule.accepted_at));
+    lines.push(bullet('最近更新', rule.updated_at));
+    if (rule.applicable_scope !== undefined) {
+      lines.push(bullet('适用范围', rule.applicable_scope));
+    }
+    lines.push(
+      bullet('决定记录', rule.history.map((h) => `${h.action}@${h.at}`).join(' → ')),
+    );
+    lines.push('', '规则正文：', '');
+    for (const paragraph of rule.content.split('\n\n')) {
+      lines.push(`    ${text(paragraph)}`, '');
+    }
   }
   return lines.join('\n');
 }

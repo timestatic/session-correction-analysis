@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { after, describe, it } from 'node:test';
 
 import type { CliIo } from '../../../src/cli.js';
-import { runCli } from '../../../src/cli.js';
+import { MIN_NODE_MAJOR, runCli } from '../../../src/cli.js';
 import { computeRecordId } from '../../../src/domain/ids.js';
 import { canonicalWorkspace } from '../../../src/store/paths.js';
 
@@ -69,7 +69,7 @@ function registerArgs(root: string, session: string, workspace: string, transcri
 }
 
 describe('cli doctor', () => {
-  it('reports a writable data root and passes on the pinned node', async () => {
+  it('reports a writable data root and passes on any supported node', async () => {
     const root = await tempDir('sca-doctor-');
     const cap = makeIo();
     const code = await runCli(['doctor', '--data-root', root], cap.io);
@@ -80,6 +80,13 @@ describe('cli doctor', () => {
     assert.ok(checks.some((c) => c.name === 'data_root' && c.status === 'ok'));
     assert.ok(checks.some((c) => c.name === 'node_version' && c.status === 'ok'));
     await fs.access(path.join(root, 'records'));
+  });
+
+  it('keeps the doctor version gate in sync with package.json engines', async () => {
+    const manifest = JSON.parse(await fs.readFile(path.join(REPO, 'package.json'), 'utf8')) as {
+      engines?: { node?: string };
+    };
+    assert.equal(manifest.engines?.node, `>=${MIN_NODE_MAJOR}`);
   });
 
   it('fails the data root check when the root cannot be written', async () => {

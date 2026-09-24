@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,7 +12,11 @@ import { hostSchema } from './domain/ids.js';
 import { prepareRecord } from './analysis/prepare.js';
 import { ingestSubmission } from './analysis/ingest.js';
 import { adaptTranscript, assertTranscriptIdentity } from './hosts/index.js';
+import { discoverSession } from './hosts/discover.js';
 import { applyDecision, type DecisionRequest } from './review/decide.js';
+import { adoptCandidate, revokeRule } from './rules/adopt.js';
+import { listRules, ruleDetail } from './rules/list.js';
+import type { AcceptedRule } from './domain/rules.js';
 import { candidateContent } from './review/content.js';
 import { candidateDetail } from './review/detail.js';
 import { approvalMetrics } from './review/metrics.js';
@@ -25,7 +30,10 @@ import { PENDING_COMMIT_MAX_BYTES } from './domain/limits.js';
 
 export const CLI_VERSION = '0.1.0';
 
-const COMMANDS = ['doctor', 'register', 'validate', 'prepare', 'ingest', 'review'] as const;
+/** Must stay in sync with package.json `engines.node`. No upper bound: newer majors are supported until proven otherwise. */
+export const MIN_NODE_MAJOR = 22;
+
+const COMMANDS = ['doctor', 'discover', 'register', 'validate', 'prepare', 'ingest', 'review', 'adopt', 'rules'] as const;
 type Command = (typeof COMMANDS)[number];
 
 export interface CliIo {
@@ -63,6 +71,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
     switch (command) {
       case 'doctor':
         return await doctorCommand(parsed.values, io);
+      case 'discover':
+        return await discoverCommand(parsed.values, io);
       case 'register':
         return await registerCommand(parsed.values, io);
       case 'validate':
@@ -73,6 +83,10 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
         return await ingestCommand(parsed.values, parsed.positionals, io);
       case 'review':
         return await reviewCommand(parsed.values, parsed.positionals, io);
+      case 'adopt':
+        return await adoptCommand(parsed.values, parsed.positionals, io);
+      case 'rules':
+        return await rulesCommand(parsed.values, io);
     }
   } catch (err) {
     return reportError(err, io);
@@ -85,7 +99,14 @@ function isCommand(value: string): value is Command {
 
 function parseCommand(command: Command, args: string[]): ParsedArgs {
   const options: OptionValues = { 'data-root': { type: 'string' } };
-  if (command === 'register') {
+  if (command === 'discover') {
+    Object.assign(options, {
+      host: { type: 'string' },
+      marker: { type: 'string' },
+      workspace: { type: 'string' },
+      home: { type: 'string' },
+    });
+  } else if (command === 'register') {
     Object.assign(options, {
       host: { type: 'string' },
       session: { type: 'string' },
@@ -124,6 +145,24 @@ function parseCommand(command: Command, args: string[]): ParsedArgs {
       scope: { type: 'string' },
       out: { type: 'string' },
     });
+  } else if (command === 'adopt') {
+    Object.assign(options, {
+      candidate: { type: 'string' },
+      request: { type: 'string' },
+      'expected-revision': { type: 'string' },
+      scope: { type: 'string' },
+      note: { type: 'string' },
+    });
+  } else if (command === 'rules') {
+    Object.assign(options, {
+      rule: { type: 'string' },
+      revoke: { type: 'string' },
+      request: { type: 'string' },
+      'expected-revision': { type: 'string' },
+      note: { type: 'string' },
+      workspace: { type: 'string' },
+      all: { type: 'boolean' },
+    });
   }
   const result = parseArgs({
     args,
@@ -132,7 +171,8 @@ function parseCommand(command: Command, args: string[]): ParsedArgs {
       command === 'validate' ||
       command === 'prepare' ||
       command === 'ingest' ||
-      command === 'review',
+      command === 'review' ||
+      command === 'adopt',
     strict: true,
   });
   return { values: result.values as ParsedArgs['values'], positionals: [...result.positionals] };
@@ -169,8 +209,8 @@ async function doctorCommand(values: ParsedArgs['values'], io: CliIo): Promise<n
   const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
   checks.push({
     name: 'node_version',
-    status: major === 24 ? 'ok' : 'fail',
-    detail: `process.versions.node=${process.versions.node}, required >=24 <25`,
+    status: major >= MIN_NODE_MAJOR ? 'ok' : 'fail',
+    detail: `process.versions.node=${process.versions.node}, required >=${MIN_NODE_MAJOR}`,
   });
 
   const pathEntries = (io.env['PATH'] ?? '').split(path.delimiter).filter((entry) => entry.length > 0);
@@ -241,6 +281,24 @@ async function packageCheck(): Promise<Check> {
     }
   }
   return { name: 'package', status: 'warn', detail: 'package.json not found next to the bundle' };
+}
+
+async function discoverCommand(values: ParsedArgs['values'], io: CliIo): Promise<number> {
+  const hostResult = hostSchema.safeParse(getString(values, 'host'));
+  const marker = getString(values, 'marker');
+  if (!hostResult.success || marker === undefined) {
+    throw new ScaError('schema_invalid', 'discover requires --host codex|claude and --marker sca-probe-<uuidv4>');
+  }
+  const workspace = getString(values, 'workspace');
+  const home = getString(values, 'home') ?? io.env['HOME'];
+  const result = await discoverSession({
+    host: hostResult.data,
+    marker,
+    homeDir: path.resolve(home === undefined || home.length === 0 ? os.homedir() : home),
+    ...(workspace !== undefined ? { workspace } : {}),
+  });
+  io.stdout(JSON.stringify({ ok: true, command: 'discover', ...result }));
+  return 0;
 }
 
 async function registerCommand(values: ParsedArgs['values'], io: CliIo): Promise<number> {
@@ -512,6 +570,111 @@ async function reviewCommand(
   return 0;
 }
 
+function summarizeRule(rule: AcceptedRule): {
+  rule_id: string;
+  title: string;
+  status: string;
+  version: number;
+  scope: AcceptedRule['scope'];
+} {
+  return { rule_id: rule.rule_id, title: rule.title, status: rule.status, version: rule.version, scope: rule.scope };
+}
+
+function repositoryFor(values: ParsedArgs['values'], io: CliIo): RecordRepository {
+  const root = getString(values, 'data-root') ?? io.env['SCA_DATA_ROOT'];
+  return new RecordRepository(root === undefined || root.length === 0 ? undefined : root);
+}
+
+async function adoptCommand(
+  values: ParsedArgs['values'],
+  positionals: string[],
+  io: CliIo,
+): Promise<number> {
+  const id = positionals[0];
+  if (id === undefined) {
+    throw new ScaError('schema_invalid', 'adopt needs a <record_id>');
+  }
+  assertSafeRecordId(id);
+  const candidate = getString(values, 'candidate');
+  const requestId = getString(values, 'request');
+  const expectedRevision = getPositiveInt(values, 'expected-revision');
+  if (candidate === undefined || requestId === undefined || expectedRevision === undefined) {
+    throw new ScaError(
+      'schema_invalid',
+      'adopt needs --candidate, --request and --expected-revision (the candidates revision shown by sca review)',
+    );
+  }
+  const scope = getString(values, 'scope');
+  const note = getString(values, 'note');
+  const repo = repositoryFor(values, io);
+  const outcome = await adoptCandidate(repo, id, {
+    request_id: requestId,
+    candidate_id: candidate,
+    expected_revision: expectedRevision,
+    ...(scope !== undefined ? { scope } : {}),
+    ...(note !== undefined ? { note } : {}),
+  });
+  io.stdout(
+    JSON.stringify({
+      ok: true,
+      command: 'adopt',
+      record_id: id,
+      receipt: outcome.receipt,
+      duplicate: outcome.duplicate,
+      registry_revision: outcome.revision,
+      rule: summarizeRule(outcome.rule),
+    }),
+  );
+  return 0;
+}
+
+async function rulesCommand(values: ParsedArgs['values'], io: CliIo): Promise<number> {
+  const repo = repositoryFor(values, io);
+  const revokeId = getString(values, 'revoke');
+  if (revokeId !== undefined) {
+    const requestId = getString(values, 'request');
+    const expectedRevision = getPositiveInt(values, 'expected-revision');
+    if (requestId === undefined || expectedRevision === undefined) {
+      throw new ScaError(
+        'schema_invalid',
+        'rules --revoke needs --request and --expected-revision (the registry revision shown by sca rules)',
+      );
+    }
+    const note = getString(values, 'note');
+    const outcome = await revokeRule(repo, {
+      request_id: requestId,
+      rule_id: revokeId,
+      expected_revision: expectedRevision,
+      ...(note !== undefined ? { note } : {}),
+    });
+    io.stdout(
+      JSON.stringify({
+        ok: true,
+        command: 'rules',
+        action: 'revoke',
+        receipt: outcome.receipt,
+        duplicate: outcome.duplicate,
+        registry_revision: outcome.revision,
+        rule: summarizeRule(outcome.rule),
+      }),
+    );
+    return 0;
+  }
+  const ruleId = getString(values, 'rule');
+  if (ruleId !== undefined) {
+    const detail = await ruleDetail(repo, ruleId);
+    io.stdout(JSON.stringify({ ok: true, command: 'rules', ...detail }));
+    return 0;
+  }
+  const workspace = getString(values, 'workspace');
+  const view = await listRules(repo, {
+    includeRevoked: values['all'] === true,
+    ...(workspace !== undefined ? { workspace: await canonicalWorkspace(workspace) } : {}),
+  });
+  io.stdout(JSON.stringify({ ok: true, command: 'rules', ...view }));
+  return 0;
+}
+
 interface RecordReport {
   record_id: string;
   ok: boolean;
@@ -587,6 +750,12 @@ const USAGE = `sca <command> [options]
 
 Commands (Phase 1):
   doctor    Diagnose node/PATH, data root writability, package and host capability matrix. No model calls.
+  discover  Locate the live session transcript via a bounded marker probe. The
+            --marker string must appear verbatim in a command the agent already
+            ran inside the session being located. Matches command text only.
+            Exactly one hit succeeds; zero or multiple hits fail closed.
+            sca discover --host codex|claude --marker sca-probe-<uuidv4>
+              [--workspace <path>] [--home <dir>]  (home defaults to $HOME)
   register  Create or reuse records/<record_id>/ skeletons for one session.
             --host codex|claude --session <id> --workspace <path> --transcript <path>
             [--trigger session_end|manual_skill|scheduled_drain|explicit_import] [--title <t>]
@@ -607,6 +776,16 @@ Commands (Phase 1):
                --target-kind harness|memory [--harness-path <p>]]  (edit_content only)
             sca review <record_id> --action copy_content|export_content
               --candidate <id> [--out <path>]                  (approved text only, no sink)
+  adopt   Record one currently-approved candidate into the root accepted_rules.md
+            registry. Idempotent: --request replays from the ledger and the
+            derived rule_id makes re-adopting the same content a no-op.
+            sca adopt <record_id> --candidate <id> --request <id>
+              --expected-revision <candidates revision> [--scope project|user] [--note <text>]
+  rules   Read or amend the accepted-rules registry (registry revision shown on list).
+            sca rules [--workspace <path>] [--all]            (list; --all includes revoked)
+            sca rules --rule <rule_id>                        (full text + provenance)
+            sca rules --revoke <rule_id> --request <id> --expected-revision <registry revision>
+              [--note <text>]
 
 Global: --data-root <path> (or SCA_DATA_ROOT; default ~/.session-correction-analysis)
 Phase 1: use a new data root. No automatic publishing, history search, HTTP or scheduling.`;
