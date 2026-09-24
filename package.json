@@ -1,6 +1,6 @@
 {
   "name": "session-correction-analysis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Explicit session correction analysis, human candidate review and Markdown export.",
   "type": "module",
   "license": "MIT",
