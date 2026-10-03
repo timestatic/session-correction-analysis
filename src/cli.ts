@@ -10,6 +10,7 @@ import { triggerSchema } from './domain/documents.js';
 import { ScaError } from './domain/errors.js';
 import { hostSchema } from './domain/ids.js';
 import { prepareRecord } from './analysis/prepare.js';
+import { runBatchCommand } from './batch/cli.js';
 import { ingestSubmission } from './analysis/ingest.js';
 import { adaptTranscript, assertTranscriptIdentity } from './hosts/index.js';
 import { discoverSession } from './hosts/discover.js';
@@ -33,7 +34,7 @@ export const CLI_VERSION = '0.1.0';
 /** Must stay in sync with package.json `engines.node`. No upper bound: newer majors are supported until proven otherwise. */
 export const MIN_NODE_MAJOR = 22;
 
-const COMMANDS = ['doctor', 'discover', 'register', 'validate', 'prepare', 'ingest', 'review', 'adopt', 'rules'] as const;
+const COMMANDS = ['doctor', 'discover', 'register', 'validate', 'prepare', 'ingest', 'review', 'adopt', 'rules', 'batch'] as const;
 type Command = (typeof COMMANDS)[number];
 
 export interface CliIo {
@@ -69,6 +70,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
   }
   try {
     switch (command) {
+      case 'batch':
+        return await runBatchCommand(parsed.values, line => io.stdout(line));
       case 'doctor':
         return await doctorCommand(parsed.values, io);
       case 'discover':
@@ -99,7 +102,14 @@ function isCommand(value: string): value is Command {
 
 function parseCommand(command: Command, args: string[]): ParsedArgs {
   const options: OptionValues = { 'data-root': { type: 'string' } };
-  if (command === 'discover') {
+  if (command === 'batch') {
+    Object.assign(options, {
+      action: { type: 'string' }, batch: { type: 'string' }, input: { type: 'string' },
+      cursor: { type: 'string' }, evidence: { type: 'string' }, 'max-bytes': { type: 'string' },
+      offset: { type: 'string' }, limit: { type: 'string' },
+      'max-targets': { type: 'string' }, 'context-events': { type: 'string' }, 'context-mode': { type: 'string' },
+    });
+  } else if (command === 'discover') {
     Object.assign(options, {
       host: { type: 'string' },
       marker: { type: 'string' },
@@ -794,6 +804,11 @@ function describe(err: unknown): { code: string; detail: string } {
 const USAGE = `sca <command> [options]
 
 Commands (Phase 1):
+  batch     Experimental isolated batch protocol; never writes record decisions.
+            --action create|append|diff|tasks|claim|task-context|heartbeat|queue|task-submit|finish|page|submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail --data-root <explicit-path>
+            [--batch <id>] [--input <json-file>] [--max-bytes <2048..1048576>]
+            [--cursor <json> | --evidence <id>] [--offset <n> --limit <1..100>]
+            [--context-mode adjacent|turn --context-events <0..4> --max-targets <1..100>] (tasks)
   doctor    Diagnose node/PATH, data root writability, package and host capability matrix. No model calls.
   discover  Locate the live session transcript via a bounded marker probe. The
             --marker string must appear verbatim in a command the agent already

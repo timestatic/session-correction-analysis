@@ -15,13 +15,13 @@ export interface WriteResult {
  * Pre-rename failures leave the previous content untouched and clean the temp.
  * Errors after rename require caller reconciliation; they cannot be rolled back here.
  */
-export async function atomicWriteText(dirPath: string, fileName: string, text: string): Promise<WriteResult> {
+export async function atomicWriteText(dirPath: string, fileName: string, text: string, mode?: number): Promise<WriteResult> {
   const target = path.join(dirPath, fileName);
   const tmp = path.join(dirPath, `.tmp-${fileName}-${crypto.randomBytes(8).toString('hex')}`);
   let handle;
   try {
     assertActiveLocksOwned();
-    handle = await fs.open(tmp, 'wx');
+    handle = await fs.open(tmp, 'wx', mode);
     await handle.writeFile(text, 'utf8');
     await handle.sync();
     await handle.close();

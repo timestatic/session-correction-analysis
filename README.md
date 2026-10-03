@@ -8,6 +8,12 @@
 
 模型负责理解语义，CLI 负责冻结输入、验证证据和维护权威状态。候选规则不会自动写入 harness 文档体系或 Agent 记忆，也不会自动获得批准；用户可以在审核后决定将规则回流到入口文件、专项规范、lint 约束或记忆系统中的合适位置。
 
+## 实验性批次原型（本地未发布）
+
+新增 `batch --action create|append|diff|tasks|claim|task-context|heartbeat|queue|task-submit|finish|page|submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`，显式指定独立 `--data-root`。支持冻结多来源、无损字节预算分页、逐目标增量提交、修订历史和覆盖查询，不调用旧 ingest 或改变人工审核。来源增长需新 batch id。支持宿主提供 worker 的有界串行循环、按轮次上下文、同来源补充证据及分页检查点；模型自动调用、语义复用和旧候选桥接尚未实现。操作契约和完整能力边界见 [批次协议](<skills/session-correction-analysis/references/BATCH_PROTOCOL.md>)。本地先 build，用 `node dist/src/cli.js`；未发布前 npx 包不包含该能力。
+
+批次执行接口与恢复示例见 [执行指南](skills/session-correction-analysis/references/BATCH_EXECUTION.md)。
+
 ## 目录
 
 - [为什么需要它](#为什么需要它)

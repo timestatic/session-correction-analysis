@@ -23,6 +23,12 @@ export const eventSourceRefSchema = z
   .strict();
 export type EventSourceRef = z.infer<typeof eventSourceRefSchema>;
 
+export const originSchema = z.object({
+  kind: z.enum(['human', 'agent', 'host_generated', 'tool_echo', 'unknown']),
+  basis: z.enum(['native_metadata', 'wrapper_pattern', 'unavailable']),
+}).strict();
+export type MessageOrigin = z.infer<typeof originSchema>;
+
 /** Normalized event produced by host adapters; ids come from adapters, never from the model. */
 export const eventSchema = z
   .object({
@@ -30,6 +36,7 @@ export const eventSchema = z
     kind: eventKindSchema,
     ordinal: z.number().int().nonnegative(),
     role: z.string().min(1).optional(),
+    origin: originSchema.optional(),
     turn_id: z.string().min(1).optional(),
     call_id: z.string().min(1).optional(),
     timestamp: z.string().min(1).optional(),
