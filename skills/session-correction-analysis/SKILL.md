@@ -51,6 +51,11 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    `evidence.origin` 是可选来源线索；`basis: wrapper_pattern` 表示封装模式匹配，`basis: native_metadata` 表示原生来源声明；两者都不是独立身份认证。缺失或 unknown 不得默认当真人，user-role 也不等于真人。分别报告已核验真人、Agent 评论、宿主生成/工具回显及未知来源，保留所有 user_coverage，不按来源跳过阅读。混合封装中的实际请求须结合语义判断，不能把常驻模板禁令算作人工介入。
    原生审批未必来自真人，也未必表示拒绝，不能仅凭事件类型判阳性。
    当前 episode 必须至少 correction.detected 或 intervention.detected 为 true；负例记入对应 processed_users 或 processed_interventions。纯需求演进返工不单独提交 episode，不得改判成纠错来绕过限制。
+
+   生成候选前另做**长期规则准入判断**；纠错事实成立不等于必须产生候选：
+   - 从具体事件提炼可在同类未来任务中复用的行为约束，而非复述这次修了什么。候选应简短写明**触发条件 → 应做/不应做的动作 → 适用范围**；必要时写例外或不适用场景。`title` 概括行为，`proposed_content` 写可执行规则，`applicable_scope`/`trigger_condition` 收紧边界；证据 ID 和原文留在 `evidence`/episode，不塞进规则正文。
+   - 只去掉偶然细节，不抹掉必要约束：文件名、平台、数值、用户明确指定的边界若决定规则何时适用，应保留或写入适用范围。不得为了“泛化”把单项目、单平台偏好扩大成所有 Agent 的通用规则；也不要写“始终认真检查”一类无法判断是否遵守的口号。
+   - 一次性任务参数、具体文案修改、偏好或已经完成的操作，若没有可复用的工程行为约束，只记录 episode，不生成候选。每条候选须能回答“下次何时触发、如何判断执行正确”；不能回答就不提交。证据仅支持窄规则时写窄规则，不能凭单次纠错声称跨会话重复出现或已验证有效。
 4. 组装提交 JSON（严格符合包内 `submission_schema`）：
    - 提交 `processed_users: [{ evidence_id, status: "reviewed" | "uncertain" }]`，恰好覆盖
      `user_coverage` 中每条消息一次；负例也要记录。没有处理的消息不能填成 uncertain。
