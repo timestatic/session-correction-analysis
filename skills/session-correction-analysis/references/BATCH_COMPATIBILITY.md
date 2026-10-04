@@ -1,8 +1,8 @@
-# 批次原型兼容与降级
+# 批次分析兼容与降级
 
 ## 隔离而非旧记录迁移
 
-新batch/v1命令仅在显式data-root的batches目录保存冻结manifest、增量ledger、queue和lineage。现有register/prepare/ingest/review及人工审核状态不由批次接口调用或转换。不会自动扫描records，不将completed当作语义覆盖，不生成旧record候选。该原型仍为实验性能力，使用本地build入口；npx仍获取已发布版本。
+新batch/v1命令仅在显式data-root的batches目录保存冻结manifest、增量ledger、queue和lineage。现有register/prepare/ingest/review及人工审核状态不由批次接口调用或转换。不会自动扫描records，不将completed当作语义覆盖，不生成旧record候选。安装入口为 `npx -y session-correction-analysis`；源码开发使用本地 build，未发布改动使用构建入口或测试包。
 
 ## 现有协议限制
 
@@ -20,6 +20,6 @@
 
 不删除batches以假装恢复、不覆盖manifest、不篡改expected_version、不强制解锁、不撤销旧人工决定。需要删除含敏感内容的试验数据时另行获得明确目标路径授权；当前无自动保留期或删除功能。
 
-## 放行仍未满足
+## 验证范围与能力限制
 
-工程合成回归不能替代P0真实基线、身份核验、完整双标签返工协议、宿主执行适配、人工金标全覆盖及同模型质量/效率对照。P5真实九月应用必须P4放行后执行，候选仍待人工审核；不授权npm发布。当前遗留工程项见[协议能力边界](<BATCH_PROTOCOL.md>)，中断恢复见[恢复手册](<BATCH_RECOVERY.md>)。
+工程回归不能替代来源身份核验、返工因果审阅、宿主模型适配、人工金标及同模型质量/效率对照。批次候选保留待审核状态；接口不批准候选或发布规则。当前遗留工程项见[协议能力边界](<BATCH_PROTOCOL.md>)，中断恢复见[恢复手册](<BATCH_RECOVERY.md>)。

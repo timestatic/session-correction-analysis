@@ -1,4 +1,4 @@
-# 批次优化原型协议与评审结论
+# 批次分析协议
 
 恢复步骤见[批次恢复手册](<BATCH_RECOVERY.md>)，涉及回执丢失、租约过期、部分提交与损坏状态的安全处理。
 
@@ -6,7 +6,7 @@
 
 ## 可注入worker库适配
 
-runBatchWorker(root,id,claimInput,worker,signal?,budgetInput?)执行单次领取→回调→租约提交→完成；任务为空不调用worker。回调仅获得任务模板、恢复cursor、限定task.evidence_ids的page(evidence_id)和显式heartbeat，不提供主代理对话或data-root。page续页允许任务内证据的expand=true游标，拒绝全局/其他证据游标；heartbeat checkpoint同样校验任务范围。回调返回或失败后读取/续租接口关闭，残留调用拒绝；已读取的正文不可能由此撤回。此接口是应用层缩减上下文，不是进程/文件系统安全沙箱；受信适配器仍须遵循显式数据根。结果经严格submission及owner/generation/expiry校验。回调异常标记worker_error并输出无原文错误；结果schema校验失败转换为固定schema_invalid，不附原始Zod问题值/模型正文。结果校验/提交失败不自动重试或吞掉错误，保持running留待现有恢复流程，不标submitted。合法结果已入账但领取目标尚未全部有充分且非uncertain判断时返回outcome=partial和revision，保留running；这不是提交失败，也不宣称任务完成。回调接口仍关闭，剩余目标须显式恢复或过期接管；入账结果不撤回，request_id重放沿用旧载荷。可选AbortSignal协作取消：预先取消不领取；回调获得signal，取消后拒绝新page/heartbeat，回调返回或拒绝时以cancelled结束且不开始提交。不会与worker抢跑Promise后声称终止工作，忽略signal的worker仍须等待返回；已进入submitTask的提交不可撤回。租约过期/被接管时取消回执仍受fence拒绝，不能改新owner任务。无自动计时续租、模型调用、进程终止、usage采集或预算取消；尚需后续适配和真实实验。
+runBatchWorker(root,id,claimInput,worker,signal?,budgetInput?)执行单次领取→回调→租约提交→完成；任务为空不调用worker。回调仅获得任务模板、恢复cursor、限定task.evidence_ids的page(evidence_id)和显式heartbeat，不提供主代理对话或data-root。page续页允许任务内证据的expand=true游标，拒绝全局/其他证据游标；heartbeat checkpoint同样校验任务范围。回调返回或失败后读取/续租接口关闭，残留调用拒绝；已读取的正文不可能由此撤回。此接口是应用层缩减上下文，不是进程/文件系统安全沙箱；受信适配器仍须遵循显式数据根。结果经严格submission及owner/generation/expiry校验。回调异常标记worker_error并输出无原文错误；结果schema校验失败转换为固定schema_invalid，不附原始Zod问题值/模型正文。结果校验/提交失败不自动重试或吞掉错误，保持running留待现有恢复流程，不标submitted。合法结果已入账但领取目标尚未全部有充分且非uncertain判断时返回outcome=partial和revision，保留running；这不是提交失败，也不宣称任务完成。回调接口仍关闭，剩余目标须显式恢复或过期接管；入账结果不撤回，request_id重放沿用旧载荷。可选AbortSignal协作取消：预先取消不领取；回调获得signal，取消后拒绝新page/heartbeat，回调返回或拒绝时以cancelled结束且不开始提交。不会与worker抢跑Promise后声称终止工作，忽略signal的worker仍须等待返回；已进入submitTask的提交不可撤回。租约过期/被接管时取消回执仍受fence拒绝，不能改新owner任务。无自动计时续租、模型调用、进程终止、usage采集或预算取消；模型适配与真实会话质量评估由调用方完成。
 
 可选budgetInput沿用batch-budget-input/v1：领取前checkBudget；exceeded或indeterminate返回budget_blocked及报告，不领取/不创建队列/不调用worker。warning和within可继续；省略参数保持原行为。输入由调用者提供，不认证来源、时效或完整请求集合，不预留并发额度，不预测此次调用费用；多个worker用同一旧快照可能仍超预算。此门禁仅分配前快照检查，不是实时usage采集或运行中费用硬限/强制取消，不能据此宣称成本闭环。
 
@@ -14,16 +14,13 @@ runBatchWorker(root,id,claimInput,worker,signal?,budgetInput?)执行单次领取
 
 ## 状态与范围
 
-2026-10-01：P1 及 P2 的隔离原型已实现；不是 P0–P5 全部完成，也不是九月分析结果。
+批次分析冻结用户明确指定的多个来源，按目标增量提交语义判断，并保留修订历史、租约与覆盖状态。支持 Codex、Claude Code 和 DSH v4 来源。
 
-原方案方向合理，实施前修正如下：
-
-1. 当前开发授权取代原方案“仅写文档”的历史边界；不授权修改既有记录或发布。
-2. 旧 register 是单来源；prepare 的 blocks 不是独立提交段；旧 ingest 会替换当前事实。禁止把分段结果反复送进旧 ingest。
-3. 新 batch/v1 是独立实验契约，无旧候选/审核桥接，不自动批准或写规则。
-4. 只支持用户显式清单、期间创建模式。created_at 和 role 是声明；父来源始终 unverified，不以相同 ID 自动验证父子身份。活动模式及历史扫描未实现。
-5. 内容相同只减少正文传递，不合并目标或自动复用语义。reuse_candidate_of 是审阅提示，reused_exact 提交当前一律拒绝。
-6. full 是结构一致的语义覆盖声明，不证明模型实际读过；uncertain、待展开或来源解析缺口均阻止 full。
+1. 单会话 register/prepare/ingest/review 保持独立；不能把分段结果反复送进单会话 ingest。
+2. batch/v1 使用独立存储契约，无单会话候选审核桥接，不自动批准或写规则。
+3. 来源由用户显式列出，时间模式仅 created。created_at 和 role 是声明；父来源始终 unverified，不按相同 ID 自动认证父子身份。活动模式及自动历史扫描未实现。
+4. 内容相同只减少正文传递，不合并目标或自动复用语义。reuse_candidate_of 是审阅提示，reused_exact 提交当前拒绝。
+5. full 表示提交声明的结构一致性，不证明模型实际读过；uncertain、待展开或来源解析缺口均阻止 full。
 
 ## 本地开发入口
 
@@ -68,7 +65,8 @@ batch 强制显式 data-root，不读取环境变量或默认根。建议专用�
 
 ## 冻结、复用与阅读
 
-- 原型单来源读取上限 64 MiB，超限明确拒绝；尚非流式大规模存储。保存原始字节 base64、字节哈希、路径、解析版本、完整 normalized events、目标用户项和来源角色。读取前后字节不同则拒绝，原文件不修改。
+- 新 DSH 快照的 native_metadata.intervention_targets=true 将原生 interrupt/approval 纳入独立分析目标；不伪装成 user_message，不自动判阳性，origin 为来源声明。原生阳性只能标 intervention，不能标文字 correction。旧快照未声明该能力时保留原有用户消息目标集合，不悄悄补目标或改账本。父取消/系统错误不转换为用户中断。
+- 批次单来源读取上限 64 MiB，超限明确拒绝；尚非流式大规模存储。保存原始字节 base64、字节哈希、路径、解析版本、完整 normalized events、目标用户项和来源角色。读取前后字节不同则拒绝，原文件不修改。
 - 当前复用既有 host adapters；Claude sidechain 与压缩记录尚未完整展开，相关数量显式保留并将来源降为 partial，不能声称这些内容已覆盖。来源/证据 ID 带快照身份，所有已解析 user_message 均保留为目标（包括机器或未知来源）。不同分支前缀也各保留目标，不能把目标总数解释为去重真人事件数。
 - 同批次正文逐字相等时 page 只给 reading_reuse_of；这是内容阅读复用提示，不是已读证明。通过 evidence 展开恢复全文，展开游标保留模式。
 - page 的整体 JSON（含指导、元数据、目标和游标）受 UTF-8 字节预算约束。Unicode 不切断代理对，长单行按 text_offset 续读，可重建全文；预算连元数据都容不下则明确报错。
@@ -194,31 +192,23 @@ node dist/src/cli.js batch --action audit --batch sample --input audit-options.j
 
 输入 `{"seed":"predeclared-seed","negative_fraction":0.2}`，seed在观察结果前冻结；fraction不得低于20%。全部正例和全部不确定项进入清单，负例按seed+target_id的哈希排序取ceil(N*fraction)，可重复且不依赖输入遍历顺序。全部项目均是unreviewed，带manifest_hash、目标版本和judgment_hash；判断修订后对应复核失效。待处理目标单列，不能用抽查代替全覆盖。
 
-工具不产生human gold、不写人工审核、不计算总体质量收益。人工须实际独立审阅；发现漏报扩大相应类别复核。完整对照试验仍须人工全量标注及争议裁决、先冻结precision/recall容忍阈值、同模型同快照比较，并报告样本不确定性。CLI只有未标注的工作清单，不是P4放行结果。
+工具不产生human gold、不写人工审核、不计算总体质量收益。人工须实际独立审阅；发现漏报扩大相应类别复核。完整对照试验仍须人工全量标注及争议裁决、先冻结precision/recall容忍阈值、同模型同快照比较，并报告样本不确定性。CLI 只提供未标注的工作清单，不代表人工复核或质量评估已完成。
 
 ## 身份异常清单
 
 `batch --action identity --batch <id> --offset 0 --limit 20 --data-root <root>` 仅读取已冻结manifest，列出unknown_actor、unverified_actor_basis、unverified_parent、partial_source、same_session_divergence、same_session_actor_conflict。只输出来源引用及受影响目标计数，不带正文或路径。affected_sources/affected_targets跨原因去重，单条target_count不能直接累加。清单为待核验提示，不是身份认证或自动隔离决策；native_metadata/user_declared也不等于可信授权。不自动归并来源、不批准语义复用、不修改已提交判断。
 
-## 验证及后续门禁
-
-独立审查发现并修复了码点内部二分的预算非单调、跨来源游标增长预算超限、损坏 JSON 错误泄露原文三项边界问题，新增合成回归。合成集成测试覆盖同 ID 分歧、否定词差异、相同正文不同主体、超长 Unicode 单行、整体页预算、重复提交、旧修订拒绝、未决阻止确定判断、来源增长后旧快照保持、旧根不创建记录。原有单测与集成测试保持通过。
-
-未完成且不能视为验收通过：
-
-- P0：真实只读基线、历史覆盖分类及真实主代理/子代理用量导出。显式逐请求usage去重工程能力已实现；CLI端到端验证离线usage/budget不创建数据根，合法JSON非法枚举值也不泄漏原文。
-- P1：可信父子/转发认证及异常身份的人工处置。只读未解决身份清单已实现，但不自动隔离或归并。精确事件前缀/后缀差异区间已实现。
-- P2：来源增长的前缀差异索引及可信语义继承、事件双标签/返工/候选及旧审核桥接、崩溃故障注入全矩阵。显式追加新快照及父来源关联已实现。
-- P3：自动worker调用、Token预算校准、模型限流及故障恢复全矩阵。显式usage的只读预算阈值告警已实现，实时采集及调度联动未实现。心跳续租、私有游标恢复和队列分页状态已实现。机械任务租约、代次托管提交、失败/取消重领已实现。字节预算和目标数驱动的机械任务规划、邻接引用及已提交范围跳过已实现。
-- P4：人工金标、实际独立复核、同模型成本/时间对照及质量容忍阈值。固定种子至少20%负例、全部正例与不确定项的未标注版本绑定复核清单已实现，不代表人工复核已完成。
-- P5：真实九月缺口处理。须 P4 放行后单独执行。
-
-不能承诺或报告 50% 节省，不能把工程回归通过当作语义质量金标验证。
-
 ## 连续执行与上下文扩展补充
 
 按轮次规划、runBatchLoop、task-context 和阅读检查点的完整接口见 [执行指南](BATCH_EXECUTION.md)。旧任务策略默认 adjacent，循环默认 turn。队列扩展字段 completed_evidence_ids 与 failure=partial_result 可选；新代码可读取旧队列，旧二进制不保证读取新扩展字段。扩展证据在同一任务身份下经 fence 持久化，不能据此改变目标或复用语义。只读 BatchReadContext 复用一次验证后的快照与索引；写入仍读取最新状态。
 
-### DSH 原生介入目标
+## 验证范围与后续工作
 
-新 DSH 快照的 native_metadata.intervention_targets=true 将原生 interrupt/approval 纳入独立分析目标；不伪装成 user_message，不自动判阳性，origin 为来源声明。原生阳性只能标 intervention，不能标文字 correction。旧快照未声明该能力时保留原有用户消息目标集合，不悄悄补目标或改账本。父取消/系统错误不转换为用户中断。
+工程回归覆盖来源分歧、不同主体的相同正文、Unicode 分页和整体预算、重复提交、旧修订拒绝、未决目标、快照追加、租约与恢复状态。真实 npm 包冒烟测试核验发布文件、安装后的命令入口和单会话流程。
+
+仍需分别核验以下事项，不能由工程测试替代：
+
+- 来源主体、父子关系与转发身份；当前 identity 只提供待核验清单，不自动隔离、认证或归并。
+- 返工因果和候选质量；双标签、成功编辑配对与待审候选已提供，仍需实际阅读证据和人工审核。批次候选尚未桥接到单会话审核流程。
+- 宿主模型适配、实时 usage 采集、模型限流和运行中预算控制；现有 worker 回调、循环、租约及显式 usage/budget 不能替代这些能力。
+- 人工金标与同模型、同快照的质量、成本和时间对照；audit 只生成版本绑定的待复核清单，不产生人工金标，也不证明收益。

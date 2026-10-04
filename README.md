@@ -1,43 +1,12 @@
 # session-correction-analysis
 
-把你在 Claude Code / Codex 会话中对 Agent 的纠正，转化为**有证据、经人工批准、可修订和可撤销**的长期工程规则。
+把你在 Claude Code / Codex / DeepSeek Harness（DSH）会话中对 Agent 的纠正，转化为**有证据、经人工批准、可修订和可撤销**的长期工程规则。
 
 `session-correction-analysis`（简称 `sca`）不是普通的会话总结器，也不是通用记忆插件。它面向一类更窄、但影响更高的信息：**用户纠正 Agent 后形成的工程规范和程序性记忆**。
 
 项目的 harness 文档体系——`AGENTS.md` / `CLAUDE.md` 入口、invariants / architecture / infrastructure 等规范、linters，以及项目级或用户级 Agent 记忆——共同构成 AI 编码助手的行为底座。但这套体系会随时间腐化：会话中的纠错没有及时回流，旧规则长期无人复审，文档、约束和实际行为逐渐失去一致性。`sca` 的目标，是为这套体系补上一条有证据、经审核、可撤销的规则供应链。
 
 模型负责理解语义，CLI 负责冻结输入、验证证据和维护权威状态。候选规则不会自动写入 harness 文档体系或 Agent 记忆，也不会自动获得批准；用户可以在审核后决定将规则回流到入口文件、专项规范、lint 约束或记忆系统中的合适位置。
-
-协议边界：episode 至少检测到纠错或执行介入；负例通过 `processed_users` 或原生介入的 `processed_interventions` 留痕，纯需求变化的返工不独立提交。Claude 的 `user` 通道不代表真人：冻结证据可携带 `origin`（来源线索），封装模式匹配不是身份认证，缺失来源按 `unknown` 处理，所有用户通道记录仍须检视。候选详情的 `source_origin_counts` 按来源锚点统计，不等同于人工纠错总量。默认 `review --candidate` 不输出证据 excerpt；`--full` 显式读取全文，限长引文不等于脱敏。`doctor` 与候选详情报告实际安装包版本，本地修复未发布前不会改变 `npx` 下载的版本。
-
-## DSH v4 历史会话接入
-
-支持 `--host dsh` 的显式历史会话，接受 DSH v4 的 `.jsonl` 和 `.jsonl.zstd` 文件。压缩输入要求 PATH 上有 `zstd`，`doctor` 会检查该能力。没有新增 npm 依赖。正式安装使用 `npx -y session-correction-analysis`；源码开发先运行 `npm run build`，再使用 `node dist/src/cli.js`。版本发布前，新增能力仅存在于本地构建或本地安装的测试包。macOS 可用 `brew install zstd` 安装解压工具。
-
-```bash
-npx -y session-correction-analysis doctor
-npx -y session-correction-analysis register --host dsh --session <文件头中的-id> --workspace <文件头中的-cwd> --transcript <会话文件或单个会话目录>
-npx -y session-correction-analysis prepare <record_id>
-```
-
-后续使用既有分析、ingest、review 和人工批准流程。分析 Skill 的发布入口仍为 `npx -y session-correction-analysis`。
-
-- 显式文件选择该版本快照；显式会话目录选择编号最高的规范版本。最高版本不是 v4 时拒绝，不静默回退；同一最高版本存在两种编码时要求指定文件。v0/v3 兼容和 DSH 当前会话 marker 定位属于后续阶段。
-- 文件头 ID 与注册参数核验；提供 cwd 时核验工作区。缺少 cwd 时允许导入，workspace 来自注册参数，`workspace_verification: unavailable` 明确表示无法从文件头核验；提供 cwd 但未请求工作区核验时为 `not_requested`，成功核验为 `matched`。不按会话标题或“最新文件”推断身份。目录名用于查找，不是身份认证。
-- 压缩字节先冻结，再有界解压为权限受限的临时 JSONL，读取结束后删除。源变化、压缩损坏或超时会拒绝本次读取。原始压缩字节和解压内容各限 64 MiB。
-- `source_fingerprint` 与 `cutoff_byte_offset` 指向原始压缩字节；`decoded_fingerprint` 与 `decoded_byte_length` 指向解压内容；证据的 `source_ref.line/hash` 指向解压后的原始 JSONL 行。两种坐标不混用。
-- 原生 `source.kind` 区分用户输入、Agent 消息、宿主上下文及未知来源。它是来源线索，不是独立身份认证。所有 user-role 消息仍进入检查范围。
-- 原生中断和审批记录进入独立 `intervention_coverage`；提交 `processed_interventions` 覆盖该清单，用户文字仍由 `user_coverage/processed_users` 处理。原生锚点只能提交介入，必须引用自身证据，不能标成文字纠错。审批记录不自动判为拒绝或真人操作；用户中断、父取消和系统错误按原生原因区分。缺少介入回执或回执不确定时，提交结果保留 partial。
-- 流式片段不重复计入已提交正文。文本/推理与工具调用分别核对提交；没有 turn/step 的片段无法可靠配对，保留 partial。缺少对应提交、未知事件、不可读取的非文本内容或 compaction 会保守报告 partial。
-- 子会话保留父历史。`evidence.inherited` 标明继承证据；snapshot 保存父 ID 和继承事件数。继承内容可以解释上下文，不能当作子会话新增纠错。审核详情和批次状态分别显示继承与本次范围。
-- `edit/write` 提供结构化文件路径；工具结果按原生状态判定成败。`TOOL_OUTCOME_UNKNOWN` 不算成功。shell 描述和模型声称修改完成不构成成功编辑证据。
-- 本地实验批次入口也接受显式 DSH v4 来源。仍须逐目标审阅，不自动批准、不自动归并父子会话、不继承语义标签。
-
-## 实验性批次原型
-
-新增 `batch --action create|append|diff|tasks|claim|task-context|heartbeat|queue|task-submit|finish|page|submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`，显式指定独立 `--data-root`。支持冻结多来源、无损字节预算分页、逐目标增量提交、修订历史和覆盖查询，不调用旧 ingest 或改变人工审核。来源增长需新 batch id。支持宿主提供 worker 的有界串行循环、按轮次上下文、同来源补充证据及分页检查点；模型自动调用、语义复用和旧候选桥接尚未实现。操作契约和完整能力边界见 [批次协议](<skills/session-correction-analysis/references/BATCH_PROTOCOL.md>)。正式安装使用 `npx -y session-correction-analysis`；源码开发使用构建入口，未发布改动仍需本地测试包。
-
-批次执行接口与恢复示例见 [执行指南](skills/session-correction-analysis/references/BATCH_EXECUTION.md)。
 
 ## 目录
 
@@ -155,7 +124,7 @@ AI 编程会话中经常发生这样的过程：
 
 ## 60 秒快速开始
 
-环境要求：Node.js `>=22`。项目已验证 Node.js 22、24、26，开发基线见 `.nvmrc`。
+环境要求：Node.js `>=22`。项目已验证 Node.js 22、24、26，开发基线见 `.nvmrc`。支持 Codex、Claude Code 和 DSH 会话；DSH 压缩输入还需要 PATH 上有 `zstd`，`doctor` 会检查该能力。macOS 可通过 `brew install zstd` 安装。
 
 ### 安装 Skill
 
@@ -181,7 +150,7 @@ npm install -g session-correction-analysis
 
 ### 发起分析
 
-安装 Skill 后，在 Claude Code / Codex 中说：
+安装 Skill 后，在 Claude Code / Codex / DSH 中说：
 
 ```text
 分析这个会话中的用户纠错，并生成规则候选。
@@ -204,7 +173,7 @@ doctor
   → review
 ```
 
-如果宿主没有直接暴露当前 session ID，Skill 会先尝试使用 marker 探针定位当前 transcript；定位失败时才需要用户提供 `/status` 中的会话信息。
+Claude Code / Codex 未提供当前 session ID 时，Skill 会尝试 marker 探针；定位失败后需要用户提供 `/status` 中的会话信息。DSH 使用文件头 ID 和明确的 transcript 路径登记，后续分析与审核流程相同。
 
 ### 审核候选
 
@@ -219,6 +188,8 @@ sca review <record_id>
 ```bash
 sca review <record_id> --candidate <candidate_id>
 ```
+
+默认详情省略完整 transcript excerpt，保留分析说明、限长引文和证据引用；`truncated: true` 表示字段已截断，不等同于脱敏。`source_origin_counts` 按来源锚点统计，不等于人工纠错总量。
 
 显式查看完整来源证据：
 
@@ -304,7 +275,7 @@ Agent：明白。我只完成本地修改和验证，不执行发布。
 
 ### 宿主 Agent：负责语义判断
 
-Claude Code、Codex 等宿主 Agent 负责判断：
+Claude Code、Codex、DSH 等宿主 Agent 负责判断：
 
 - 用户是否在纠正 Agent；
 - 用户是否叫停、拒绝授权或接管执行；
@@ -316,14 +287,18 @@ Claude Code、Codex 等宿主 Agent 负责判断：
 
 CLI 本身不发起模型请求，负责：
 
-- 定位并验证 Codex / Claude Code transcript；
+- 读取并验证 Codex / Claude Code / DSH transcript；
 - 冻结本次分析的输入范围；
 - 将不同宿主格式规范化为统一事件和 Evidence；
-- 建立用户消息覆盖清单；
+- 建立用户消息与原生介入的独立覆盖清单；
 - 提取文件编辑信号和潜在返工提示；
 - 校验 submission schema、引文、时序和返工证据；
 - 管理租约、generation、锁、revision 和事务恢复；
 - 管理候选审核状态和已采纳规则账本。
+
+对于压缩会话，CLI 先冻结原始字节，再解压到权限受限的临时文件，读取结束后删除。原始压缩字节和解压内容各限 64 MiB；源变化、压缩损坏或解压超时会拒绝本次读取。`source_fingerprint/cutoff_byte_offset` 指向原始压缩字节，`decoded_fingerprint/decoded_byte_length` 指向解压内容，证据的 `source_ref.line/hash` 指向解压后的 JSONL 行。
+
+来源线索由 `evidence.origin` 保存。DSH 使用原生 `source.kind`，Claude 部分封装使用 `wrapper_pattern`；两者都不构成独立身份认证。所有用户通道记录均保留在阅读范围中。子会话的继承证据由 `evidence.inherited` 标明，snapshot 保存 `parent_session_id/inherited_events`；继承范围与本会话新增范围分别报告，不能把父历史当作子会话新增纠错。
 
 端到端流程如下：
 
@@ -338,7 +313,7 @@ sca prepare
   → 产出结构化 submission JSON
 
 sca ingest
-  → 校验用户消息覆盖、引文、时序、编辑结果和运行身份
+  → 校验用户消息与原生介入覆盖、引文、时序、编辑结果和运行身份
 
 sca review
   → 人工 approve / reject / edit_content / revoke / supersede
@@ -355,10 +330,11 @@ sca adopt / sca rules
 ## 核心保证
 
 - **固定输入**：`prepare` 绑定 transcript 的明确字节前缀；仅在尾部追加不会改变本轮已经冻结的输入。
-- **用户消息全覆盖**：submission 必须逐项回执所有 `UserCoverage`，区分“没有发现纠错”和“根本没有检查”。
+- **逐目标阅读回执**：用户消息通过 `processed_users` 覆盖 `user_coverage`，原生中断和审批通过 `processed_interventions` 覆盖 `intervention_coverage`，两类目标分别处理。原生介入缺回执或存在不确定回执时，结果保留 partial。
+- **标签有证据约束**：episode 至少检测到纠错或执行介入；负例仅提交阅读回执。原生介入锚点只能标介入，须引用自身证据，不能标成文字纠错。审批不自动判为拒绝或真人操作；纯需求变化的返工不独立提交。
 - **引文可验证**：候选引用的 Evidence ID 必须存在，引文必须逐字命中可引用正文。
 - **时序可验证**：纠错前行为必须发生在用户锚点之前，纠错后行为必须发生在之后。
-- **返工有事实下限**：声称已完成代码返工时，必须存在纠错前后的成功编辑及相交文件路径。
+- **返工有事实下限**：声称已完成代码返工时，必须存在纠错前后的成功编辑及相交文件路径。DSH 的 `edit/write` 使用结构化路径，结果按原生状态判定；`TOOL_OUTCOME_UNKNOWN`、shell 描述或模型声称完成都不能作为成功编辑证据。
 - **模型不能自我批准**：模型只提交语义分析结果，不能提交 `approved`、`published` 等权威状态。
 - **批准绑定内容版本**：候选内容变化后，旧批准自动失效。
 - **并发写入受控**：租约、generation fencing token、revision、文件锁和幂等请求用于防止陈旧结果覆盖新状态。
@@ -373,6 +349,8 @@ sca adopt / sca rules
 
 ## 能力边界
 
+- 支持 DSH v4；v0/v3 和 DSH marker 定位尚未支持。显式会话目录选最高规范版本，未知版本不回退；同版本多编码须指定文件。
+- compaction、缺失流式提交、未知事件或无法读取的非文本内容会使来源覆盖率为 partial。文本流和工具流分别检查完整性，同一步的文本提交不能代替工具调用提交。
 - CLI 能验证引文、时序和编辑事实，但语义判断质量仍取决于宿主模型。
 - 返工分析基于 transcript 中的编辑、路径和文本指纹，只提供事实下限，不是 AST 级语义证明。
 - SCA 不自动批准或发布规则，也暂不提供跨会话去重、冲突检测、规则老化复审和效果评估。
@@ -380,18 +358,30 @@ sca adopt / sca rules
 
 ## 手动 CLI 工作流
 
-下面的命令与 Skill 在后台执行的是同一条链路，适合脚本化或调试：
+下面的命令与 Skill 在后台执行的是同一条链路，适合脚本化或调试。`sca` 可来自全局安装，或替换为 `npx -y session-correction-analysis`；源码开发使用 `npm run build` 后的 `node dist/src/cli.js`。未发布改动使用本地构建或测试包。
+
+登记时按来源选择 `--host`：
+
+| 会话来源 | `--host` | `--transcript` |
+|---|---|---|
+| Codex | `codex` | 明确的 transcript 文件 |
+| Claude Code | `claude` | 明确的 transcript 文件 |
+| DeepSeek Harness（DSH） | `dsh` | v4 `.jsonl`、`.jsonl.zstd` 文件或单个会话目录 |
+
+session ID 必须与源文件核验。DSH 提供 cwd 时核验工作区，成功记录为 `workspace_verification: matched`；缺少 cwd 时允许导入，工作区来自注册参数并记录 `unavailable`；未请求工作区核验时为 `not_requested`。不得按标题或最新历史猜测身份。
+
+### 单会话分析
 
 ```bash
 # 0. 环境自检
 sca doctor
 
-# 1. 定位当前会话（不知道 session ID 或 transcript 路径时）
+# 1. 定位当前会话（仅 Codex / Claude；已有路径或 DSH 来源跳过）
 sca discover --host codex \
   --marker sca-probe-<uuidv4> \
   --workspace <workspace_path>
 
-# 2. 登记源会话
+# 2. 登记源会话（按上表选择 host；DSH 可传压缩文件或会话目录）
 sca register --host codex \
   --session <session_id> \
   --workspace <workspace_path> \
@@ -429,6 +419,19 @@ sca adopt <record_id> --candidate <candidate_id> \
 ```bash
 sca
 ```
+
+### 批次分析
+
+用户明确授权多个来源时，使用 `sca batch`，并指定独立的私有 `--data-root`。支持 Codex、Claude Code 和 DSH 来源；批次目录与单会话记录分开保存。
+
+- `create|append|diff`：冻结显式来源、追加新来源到新批次、查询事件差异。
+- `page|tasks|task-context`：按字节预算读取证据，规划分析目标与上下文，保留分页检查点。
+- `claim|heartbeat|queue|task-submit|finish`：管理 worker 租约、恢复状态和受租约校验的增量提交。
+- `submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`：提交语义判断，查询覆盖、用量、复核清单、预算、身份线索、编辑配对和待审核候选。
+
+每个目标都须实际审阅。来源增长使用新 batch ID；不自动继承语义判断、归并父子会话或批准候选。worker 由宿主提供，CLI 不自动调用模型；语义复用和单会话候选审核桥接尚未实现。
+
+操作字段见[批次协议](skills/session-correction-analysis/references/BATCH_PROTOCOL.md)，连续执行与检查点见[执行指南](skills/session-correction-analysis/references/BATCH_EXECUTION.md)，故障处理见[恢复手册](skills/session-correction-analysis/references/BATCH_RECOVERY.md)。
 
 ## 数据目录
 
