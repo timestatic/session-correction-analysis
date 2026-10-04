@@ -1,203 +1,223 @@
-# session-correction-analysis
+<div align="center">
 
-把你在 Claude Code / Codex / DeepSeek Harness（DSH）会话中对 Agent 的纠正，转化为**有证据、经人工批准、可修订和可撤销**的长期工程规则。
+<h1><img src="assets/readme/sca-logo.png" alt="SCA logo: a speech bubble with rule lines and a review checkmark" height="48" align="absmiddle"> session-correction-analysis</h1>
 
-`session-correction-analysis`（简称 `sca`）不是普通的会话总结器，也不是通用记忆插件。它面向一类更窄、但影响更高的信息：**用户纠正 Agent 后形成的工程规范和程序性记忆**。
+[![License](https://img.shields.io/github/license/timestatic/session-correction-analysis?label=license)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
+[![Version](https://img.shields.io/github/v/tag/timestatic/session-correction-analysis?label=version)](https://github.com/timestatic/session-correction-analysis/tags)
+[![npm version](https://img.shields.io/npm/v/session-correction-analysis)](https://www.npmjs.com/package/session-correction-analysis)
+[![npm downloads](https://img.shields.io/npm/dm/session-correction-analysis)](https://www.npmjs.com/package/session-correction-analysis)
+[![agent-skills](https://img.shields.io/badge/topic-agent--skills-6f42c1)](https://github.com/topics/agent-skills)
+[![agentic-coding](https://img.shields.io/badge/topic-agentic--coding-6f42c1)](https://github.com/topics/agentic-coding)
+[![claude-code](https://img.shields.io/badge/topic-claude--code-6f42c1)](https://github.com/topics/claude-code)
+[![codex](https://img.shields.io/badge/topic-codex-6f42c1)](https://github.com/topics/codex)
+[![deepseek-harness](https://img.shields.io/badge/topic-deepseek--harness-6f42c1)](https://github.com/topics/deepseek-harness)
+[![human-in-the-loop](https://img.shields.io/badge/topic-human--in--the--loop-6f42c1)](https://github.com/topics/human-in-the-loop)
 
-项目的 harness 文档体系——`AGENTS.md` / `CLAUDE.md` 入口、invariants / architecture / infrastructure 等规范、linters，以及项目级或用户级 Agent 记忆——共同构成 AI 编码助手的行为底座。但这套体系会随时间腐化：会话中的纠错没有及时回流，旧规则长期无人复审，文档、约束和实际行为逐渐失去一致性。`sca` 的目标，是为这套体系补上一条有证据、经审核、可撤销的规则供应链。
+[English](README.md) · [简体中文](README-zh.md)
 
-模型负责理解语义，CLI 负责冻结输入、验证证据和维护权威状态。候选规则不会自动写入 harness 文档体系或 Agent 记忆，也不会自动获得批准；用户可以在审核后决定将规则回流到入口文件、专项规范、lint 约束或记忆系统中的合适位置。
+<img src="assets/readme/correction-to-rules-en.png" alt="User corrections become evidence-backed rule candidates, followed by human review before export or adoption" width="900">
 
-## 目录
+</div>
 
-- [为什么需要它](#为什么需要它)
-- [适合与不适合的场景](#适合与不适合的场景)
-- [与会话总结、记忆插件的区别](#与会话总结记忆插件的区别)
-- [60 秒快速开始](#60-秒快速开始)
-- [示例：从一次纠错到长期规则](#示例从一次纠错到长期规则)
-- [工作原理](#工作原理)
-- [核心保证](#核心保证)
-- [隐私与网络边界](#隐私与网络边界)
-- [能力边界](#能力边界)
-- [手动 CLI 工作流](#手动-cli-工作流)
-- [数据目录](#数据目录)
-- [常用命令](#常用命令)
-- [自动化与定时分析](#自动化与定时分析)
+Turn the corrections you make to Agents during Claude Code / Codex / DeepSeek Harness (DSH) sessions into durable engineering rules that are **evidence-backed, human-approved, revisable, and revocable**.
+
+`session-correction-analysis` (`sca` for short) is neither a general session summarizer nor a general-purpose memory plugin. It addresses a narrower but higher-impact category of information: **engineering conventions and procedural memory arising when users correct an Agent**.
+
+A project's harness documentation system—the `AGENTS.md` / `CLAUDE.md` entry points, conventions such as invariants / architecture / infrastructure, linters, and project-level or user-level Agent memory—forms the behavioral foundation for AI coding assistants. But this system can decay over time: corrections in sessions do not flow back promptly, old rules go unreviewed for long periods, and documentation, constraints, and actual behavior gradually diverge. The goal of `sca` is to add an evidence-backed, reviewed, revocable rule supply chain to that system.
+
+The model interprets semantics; the CLI freezes input, verifies evidence, and maintains authoritative state. Candidate rules are not automatically written into the harness documentation system or Agent memory, and are not automatically approved. After review, users decide whether to feed rules back into entry-point files, specialized conventions, lint constraints, or the appropriate memory system.
+
+## Contents
+
+- [Why it is needed](#why-it-is-needed)
+- [When to use it—and when not to](#when-to-use-itand-when-not-to)
+- [How it differs from session summaries and memory plugins](#how-it-differs-from-session-summaries-and-memory-plugins)
+- [60-second quick start](#60-second-quick-start)
+- [Example: from one correction to a durable rule](#example-from-one-correction-to-a-durable-rule)
+- [How it works](#how-it-works)
+- [Core guarantees](#core-guarantees)
+- [Privacy and network boundaries](#privacy-and-network-boundaries)
+- [Limitations](#limitations)
+- [Manual CLI workflow](#manual-cli-workflow)
+- [Data directory](#data-directory)
+- [Common commands](#common-commands)
+- [Automation and scheduled analysis](#automation-and-scheduled-analysis)
 - [License](#license)
 
-## 为什么需要它
+## Why it is needed
 
-AI 编程会话中经常发生这样的过程：
+AI coding sessions often follow this pattern:
 
-1. Agent 误解需求、执行了不合适的操作，或者写出了需要返工的代码；
-2. 用户在会话中指出问题；
-3. Agent 当场调整；
-4. 会话结束后，这次纠错散落在 transcript 中；
-5. 后续 Agent 再次犯下同样的错误。
+1. The Agent misunderstands a requirement, performs an inappropriate operation, or writes code that needs rework;
+2. The user points out the problem during the session;
+3. The Agent adjusts immediately;
+4. Once the session ends, the correction remains scattered in the transcript;
+5. A later Agent makes the same mistake again.
 
-直接让模型总结当前会话适合一次性复盘，但当规则要长期影响项目或团队时，还需要回答更多问题：
+Asking the model directly to summarize the current session is suitable for a one-off retrospective. But when a rule will affect a project or team over the long term, more questions need answers:
 
-- 分析的是哪一次会话、哪一段固定输入？
-- 每条用户消息是否都被检查过？
-- 候选引用的内容是否真实存在于 transcript？
-- 所谓“已经返工”是否有实际编辑和成功结果佐证？
-- 哪些内容只是模型建议，哪些内容已经由用户批准？
-- 候选修改后，旧批准是否仍然有效？
-- 已采纳规则以后如何修订或撤销？
+- Which session, and which fixed portion of its input, was analyzed?
+- Was every user message examined?
+- Do the passages cited by a candidate actually appear in the transcript?
+- Is a claim that something was “reworked” supported by actual edits and successful results?
+- Which items are merely model suggestions, and which have been approved by a user?
+- Does an old approval remain valid after a candidate is changed?
+- How can an adopted rule later be revised or revoked?
 
-`sca` 把这些问题组织成一条可治理的工程链路：
+`sca` organizes these questions into a governable engineering process:
 
 ```text
-会话 transcript
-  → 冻结输入并生成证据包
-  → 宿主 Agent 分析纠错、介入和返工
-  → CLI 校验分析结果
-  → 用户审核规则候选
-  → 回流到 harness 文档体系 / Agent 记忆，或登记到规则账本
-  → 后续修订或撤销
+Session transcript
+  → freeze input and generate an evidence packet
+  → host Agent analyzes corrections, interventions, and rework
+  → CLI validates the analysis result
+  → user reviews rule candidates
+  → feed rules back into the harness documentation system / Agent memory, or record them in the rules ledger
+  → revise or revoke them later
 ```
 
-## 适合与不适合的场景
+## When to use it—and when not to
 
-| 场景 | 建议 |
+| Scenario | Recommendation |
 |---|---|
-| 当前会话很短，只想即时复盘 | 直接让模型分析通常更简单 |
-| 结果不会进入长期规范，分析错误代价较低 | 不一定需要 `sca` |
-| 分析历史会话 | 适合使用 `sca` |
-| 长会话可能经过上下文压缩或裁剪 | 适合使用 `sca` |
-| 需要批量或定时分析多个会话 | 适合使用 `sca` |
-| 规则将进入 harness 文档体系、lint 约束或共享记忆 | 适合使用 `sca` |
-| 需要来源证据、人工审批、版本和撤销记录 | 适合使用 `sca` |
-| 希望自动批准并直接修改 harness 文档体系 | 不适合；`sca` 明确保留人工审核边界 |
-| 希望保存任务进度、项目事实或完整用户画像 | 不适合；`sca` 不是通用记忆系统 |
+| The current session is short and you only want an immediate retrospective | Asking the model directly is usually simpler |
+| The result will not become a long-term convention, and the cost of an analytical error is low | You may not need `sca` |
+| Analyzing a historical session | `sca` is suitable |
+| A long session may have undergone context compaction or trimming | `sca` is suitable |
+| Analyzing multiple sessions in batches or on a schedule | `sca` is suitable |
+| Rules will enter the harness documentation system, lint constraints, or shared memory | `sca` is suitable |
+| You need source evidence, human approval, versioning, and a revocation record | `sca` is suitable |
+| You want automatic approval and direct modification of the harness documentation system | Not suitable; `sca` explicitly preserves the human review boundary |
+| You want to store task progress, project facts, or a complete user profile | Not suitable; `sca` is not a general-purpose memory system |
 
-## 与会话总结、记忆插件的区别
+## How it differs from session summaries and memory plugins
 
-三者都可能读取会话并提取信息，但解决的问题不同：
+All three approaches may read sessions and extract information, but they solve different problems:
 
-| 方案 | 主要目标 | 典型产物 | 治理重点 |
+| Approach | Primary goal | Typical output | Governance focus |
 |---|---|---|---|
-| 直接让模型总结会话 | 描述这次发生了什么 | 会话摘要、行动项、临时建议 | 快速、低成本 |
-| 记忆插件 | 让项目事实、用户偏好和历史信息以后可以被召回 | 工作记忆、情景记忆、语义记忆、用户画像 | 捕获、存储和检索 |
-| `sca` | 把用户纠错转化为可信的长期工程规则 | 带证据的候选、审核记录、已采纳规则 | 来源、批准、版本和撤销 |
+| Ask a model directly to summarize a session | Describe what happened this time | Session summary, action items, temporary suggestions | Speed and low cost |
+| Memory plugin | Make project facts, user preferences, and historical information retrievable later | Working memory, episodic memory, semantic memory, user profile | Capture, storage, and retrieval |
+| `sca` | Turn user corrections into trustworthy, durable engineering rules | Evidence-backed candidates, review records, adopted rules | Provenance, approval, versioning, and revocation |
 
-记忆插件通常处理更广泛的信息，例如：
+Memory plugins usually process a broader range of information, such as:
 
-- 当前任务状态和未完成事项；
-- 项目事实、技术决策和历史背景；
-- 用户偏好与跨会话习惯；
-- 值得在后续请求中召回的摘要。
+- Current task state and unfinished items;
+- Project facts, technical decisions, and historical context;
+- User preferences and habits across sessions;
+- Summaries worth recalling in future requests.
 
-`sca` 只关注其中较窄但影响较高的一类：**从用户纠错中产生的程序性记忆或工程规则**。这些规则可能影响后续所有 Agent，因此不能只依赖“模型认为值得记住”，还需要：
+`sca` focuses on only one narrower but higher-impact category: **procedural memory or engineering rules produced by user corrections**. Such rules may affect all future Agents, so “the model thinks this is worth remembering” is insufficient. They also require:
 
-- 保留真实来源证据；
-- 区分 transcript 中的事实与模型推断；
-- 明确规则的目标和适用范围；
-- 将批准绑定到具体内容版本；
-- 由用户显式批准；
-- 支持后续修订和撤销。
+- Preservation of real source evidence;
+- Separation of transcript facts from model inferences;
+- A clear rule objective and scope of application;
+- Approval bound to a specific content version;
+- Explicit user approval;
+- Support for later revision and revocation.
 
-两者不是替代关系。记忆插件可以负责广泛的信息捕获与召回，`sca` 则可以作为高影响规则进入长期记忆之前的审核门禁：
+The two approaches are complementary, not substitutes. A memory plugin can capture and recall broad information, while `sca` can serve as a review gate before high-impact rules enter long-term memory:
 
 ```text
-普通项目事实、进度和偏好
-  → 由记忆插件捕获和召回
+Ordinary project facts, progress, and preferences
+  → captured and recalled by a memory plugin
 
-用户纠错产生的高影响规则
-  → SCA 提取证据并生成候选
-  → 用户审核批准
-  → 回流到 harness 入口、专项规范、lint 约束或 Agent 记忆
+High-impact rules arising from user corrections
+  → SCA extracts evidence and produces candidates
+  → user reviews and approves
+  → feed back into harness entry points, specialized conventions, lint constraints, or Agent memory
 ```
 
-与常见记忆系统概念的对应关系如下：
+The approximate correspondence with common memory-system concepts is:
 
-| `sca` 概念 | 记忆系统中的近似概念 |
+| `sca` concept | Approximate memory-system concept |
 |---|---|
-| Transcript | 原始会话日志 |
-| Event / Evidence | 带来源的记忆证据 |
-| Episode | 结构化情景记忆 |
-| Candidate | 长期记忆候选 |
-| Approve | 人工确认记忆 |
-| Adopt | 登记到长期规则账本 |
-| Revoke | 让已有规则失效 |
-| Rule | 程序性记忆 |
+| Transcript | Raw session log |
+| Event / Evidence | Memory evidence with provenance |
+| Episode | Structured episodic memory |
+| Candidate | Long-term memory candidate |
+| Approve | Human confirmation of memory |
+| Adopt | Registration in the long-term rules ledger |
+| Revoke | Invalidation of an existing rule |
+| Rule | Procedural memory |
 
-## 60 秒快速开始
+## 60-second quick start
 
-环境要求：Node.js `>=22`。项目已验证 Node.js 22、24、26，开发基线见 `.nvmrc`。支持 Codex、Claude Code 和 DSH 会话；DSH 压缩输入还需要 PATH 上有 `zstd`，`doctor` 会检查该能力。macOS 可通过 `brew install zstd` 安装。
+Requirements: Node.js `>=22`. The project has verified Node.js 22, 24, and 26; see `.nvmrc` for the development baseline. Codex, Claude Code, and DSH sessions are supported. Compressed DSH input additionally requires `zstd` on your PATH; `doctor` checks for it. On macOS, install it with `brew install zstd`.
 
-### 安装 Skill
+### Install the Skill
 
-推荐把仓库中的薄 Skill 安装到 Claude Code 或 Codex：
+Installing the thin Skill from the repository into Claude Code or Codex is recommended:
 
 ```bash
 npx skills add timestatic/session-correction-analysis
 ```
 
-也可以手动复制 `skills/session-correction-analysis/`：
+Alternatively, copy `skills/session-correction-analysis/` manually:
 
-- Claude Code 全局：`~/.claude/skills/`
-- Codex 项目级：`.agents/skills/`
-- Codex 用户级：`~/.codex/skills/`
+- Claude Code globally: `~/.claude/skills/`
+- Codex project-level: `.agents/skills/`
+- Codex user-level: `~/.codex/skills/`
 
-Skill 是纯指令文件，不包含 CLI 打包代码。运行时通过 `npx -y session-correction-analysis` 获取 CLI；首次运行通常需要访问 npm registry，之后可使用本地缓存。
+The Skill contains instructions only, not bundled CLI code. At runtime it obtains the CLI via `npx -y session-correction-analysis`; the first run generally needs access to the npm registry, after which the local cache can be used.
 
-如果只想使用 CLI，也可以全局安装：
+If you only want the CLI, you can also install it globally:
 
 ```bash
 npm install -g session-correction-analysis
 ```
 
-### 发起分析
+### Start an analysis
 
-安装 Skill 后，在 Claude Code / Codex / DSH 中说：
+After installing the Skill, say this in Claude Code / Codex / DSH:
 
 ```text
-分析这个会话中的用户纠错，并生成规则候选。
+Analyze the user corrections in this session and generate rule candidates.
 ```
 
-也可以直接调用：
+You can also invoke it directly:
 
 ```text
 /session-correction-analysis
 ```
 
-Agent 会按照 Skill 执行：
+The Agent follows the Skill's sequence:
 
 ```text
 doctor
   → discover / register
   → prepare
-  → 分析 packet
+  → analyze the packet
   → ingest
   → review
 ```
 
-Claude Code / Codex 未提供当前 session ID 时，Skill 会尝试 marker 探针；定位失败后需要用户提供 `/status` 中的会话信息。DSH 使用文件头 ID 和明确的 transcript 路径登记，后续分析与审核流程相同。
+If Claude Code / Codex has not provided the current session ID, the Skill attempts a marker probe; if it cannot locate the session, you must supply session information from `/status`. DSH is registered using its file-header ID and an explicit transcript path; subsequent analysis and review follow the same process.
 
-### 审核候选
+### Review candidates
 
-分析完成后列出候选：
+List candidates after analysis finishes:
 
 ```bash
 sca review <record_id>
 ```
 
-查看某条候选及其证据摘要：
+View a candidate and a summary of its evidence:
 
 ```bash
 sca review <record_id> --candidate <candidate_id>
 ```
 
-默认详情省略完整 transcript excerpt，保留分析说明、限长引文和证据引用；`truncated: true` 表示字段已截断，不等同于脱敏。`source_origin_counts` 按来源锚点统计，不等于人工纠错总量。
+By default, the detailed view omits full transcript excerpts while retaining analytical explanations, length-limited quotes, and evidence references. `truncated: true` means a field was truncated; it does not mean the content was redacted. `source_origin_counts` counts source anchors, not the total number of human corrections.
 
-显式查看完整来源证据：
+Explicitly view the complete source evidence:
 
 ```bash
 sca review <record_id> --candidate <candidate_id> --full
 ```
 
-批准候选：
+Approve a candidate:
 
 ```bash
 sca review <record_id> --action approve \
@@ -206,11 +226,11 @@ sca review <record_id> --action approve \
   --expected-revision <revision>
 ```
 
-候选还支持 `reject`、`edit_content`、`revoke` 和 `supersede`。批准绑定当前内容版本；正文、目标或适用范围被修改后，旧批准自动失效，必须重新审核。
+Candidates also support `reject`, `edit_content`, `revoke`, and `supersede`. Approval is bound to the current content version; changing the body, target, or scope automatically invalidates the previous approval, and requires another review.
 
-### 导出或采纳
+### Export or adopt
 
-将已批准候选导出为 Markdown：
+Export an approved candidate as Markdown:
 
 ```bash
 sca review <record_id> --action export_content \
@@ -218,9 +238,9 @@ sca review <record_id> --action export_content \
   --out ./rule.md
 ```
 
-也可以使用 `copy_content` 输出适合复制的内容。导出后，由用户决定规则在 harness 文档体系中的落点：可以写入 `AGENTS.md` / `CLAUDE.md` 入口，归入 invariants / architecture / infrastructure 等专项规范，转化为 lint 约束，或进入项目级、用户级 Agent 记忆。
+You can also use `copy_content` to output content suitable for copying. After export, the user decides where the rule belongs in the harness documentation system: it may be added to the `AGENTS.md` / `CLAUDE.md` entry points, placed in specialized conventions such as invariants / architecture / infrastructure, converted into lint constraints, or added to project-level or user-level Agent memory.
 
-如果要把批准版本登记到长期规则账本：
+To register the approved version in the long-term rules ledger:
 
 ```bash
 sca adopt <record_id> --candidate <candidate_id> \
@@ -228,214 +248,214 @@ sca adopt <record_id> --candidate <candidate_id> \
   --expected-revision <revision>
 ```
 
-请注意：
+Note the distinction:
 
-- `approve`：批准当前候选内容；
-- `export_content` / `copy_content`：输出已批准内容；
-- `adopt`：把已批准版本登记到 `accepted_rules.md`；
-- `adopt` 只登记规则账本，不会自动修改 harness 入口、专项规范、lint 约束或 Agent 记忆，也不代表规则已经完成回流。
+- `approve`: approve the current candidate content;
+- `export_content` / `copy_content`: output approved content;
+- `adopt`: register the approved version in `accepted_rules.md`;
+- `adopt` only registers it in the rules ledger. It does not automatically modify harness entry points, specialized conventions, lint constraints, or Agent memory, nor does it mean the rule has already been fed back into those systems.
 
-## 示例：从一次纠错到长期规则
+## Example: from one correction to a durable rule
 
-假设会话中出现了下面的过程：
-
-```text
-Agent：修改完成后，我会直接执行 npm publish。
-用户：不要执行发布。npm publish 是不可逆的外部操作，必须先得到我的明确确认。
-Agent：明白。我只完成本地修改和验证，不执行发布。
-```
-
-`sca` 会把用户消息、此前的 Agent 行为和后续响应组织成带来源的分析证据。宿主 Agent 可以据此提出候选：
+Suppose the following happens in a session:
 
 ```text
-标题：执行 npm publish 前必须获得用户明确确认
-类别：操作安全规则
-状态：proposed
-来源：用户纠错消息及前后行为证据
+Agent: After finishing the changes, I'll run npm publish directly.
+User: Do not publish. npm publish is an irreversible external action; you must get my explicit confirmation first.
+Agent: Understood. I'll only make and verify the local changes, without publishing.
 ```
 
-用户审核后，批准并导出的规则可能是：
+`sca` organizes the user message, the Agent's prior behavior, and its subsequent response into analysis evidence with provenance. The host Agent can then propose a candidate:
+
+```text
+Title: Explicit user confirmation is required before running npm publish
+Category: Operational safety rule
+Status: proposed
+Source: The user's correction and evidence of behavior before and after it
+```
+
+After user review, the approved and exported rule might be:
 
 ```markdown
-# 发布前必须获得用户明确确认
+# Obtain explicit user confirmation before publishing
 
-执行 `npm publish` 等不可逆外部操作前，必须获得用户明确确认。
-在未获得确认时，只能完成本地修改、检查和发布前验证，不得执行实际发布。
+Before running `npm publish` or another irreversible external operation, obtain the user's explicit confirmation.
+Without confirmation, only perform local changes, checks, and pre-publication verification; do not actually publish.
 ```
 
-如果该规则需要进入跨会话账本，再显式执行 `sca adopt`。完整路径是：
+If the rule should enter the cross-session ledger, explicitly run `sca adopt` afterward. The complete path is:
 
 ```text
-真实纠错 → 来源证据 → 规则候选 → 人工批准 → 导出或采纳 → 后续修订/撤销
+Real correction → source evidence → rule candidate → human approval → export or adoption → later revision/revocation
 ```
 
-## 工作原理
+## How it works
 
-`sca` 在 CLI 和宿主 Agent 之间划分职责。
+`sca` divides responsibilities between the CLI and the host Agent.
 
-### 宿主 Agent：负责语义判断
+### Host Agent: semantic judgment
 
-Claude Code、Codex、DSH 等宿主 Agent 负责判断：
+Host Agents such as Claude Code, Codex, and DSH determine:
 
-- 用户是否在纠正 Agent；
-- 用户是否叫停、拒绝授权或接管执行；
-- 前后的编辑是否构成撤销、替换或修复；
-- 某次纠错是否值得形成长期规则；
-- 规则正文、触发条件和适用范围应该如何表达。
+- Whether the user is correcting the Agent;
+- Whether the user is stopping execution, denying authorization, or taking over execution;
+- Whether edits before and after constitute a reversal, replacement, or repair;
+- Whether a correction merits a durable rule;
+- How the rule text, triggering conditions, and scope should be expressed.
 
-### CLI：负责事实与权威状态
+### CLI: facts and authoritative state
 
-CLI 本身不发起模型请求，负责：
+The CLI does not itself make model requests. Its responsibilities are to:
 
-- 读取并验证 Codex / Claude Code / DSH transcript；
-- 冻结本次分析的输入范围；
-- 将不同宿主格式规范化为统一事件和 Evidence；
-- 建立用户消息与原生介入的独立覆盖清单；
-- 提取文件编辑信号和潜在返工提示；
-- 校验 submission schema、引文、时序和返工证据；
-- 管理租约、generation、锁、revision 和事务恢复；
-- 管理候选审核状态和已采纳规则账本。
+- Read and verify Codex / Claude Code / DSH transcripts;
+- Freeze the input range for the current analysis;
+- Normalize different host formats into shared events and Evidence;
+- Build separate coverage checklists for user messages and native interventions;
+- Extract file-edit signals and potential rework hints;
+- Validate the submission schema, quotes, chronology, and rework evidence;
+- Manage leases, generation, locks, revision, and transaction recovery;
+- Manage candidate review states and the adopted-rules ledger.
 
-对于压缩会话，CLI 先冻结原始字节，再解压到权限受限的临时文件，读取结束后删除。原始压缩字节和解压内容各限 64 MiB；源变化、压缩损坏或解压超时会拒绝本次读取。`source_fingerprint/cutoff_byte_offset` 指向原始压缩字节，`decoded_fingerprint/decoded_byte_length` 指向解压内容，证据的 `source_ref.line/hash` 指向解压后的 JSONL 行。
+For compressed sessions, the CLI first freezes the original bytes, then decompresses them into a permission-restricted temporary file and deletes that file after reading. Both the original compressed bytes and the decompressed content are limited to 64 MiB; changes to the source, corrupted compression, or a decompression timeout cause the read to be rejected. `source_fingerprint/cutoff_byte_offset` refer to the original compressed bytes; `decoded_fingerprint/decoded_byte_length` refer to the decompressed content; evidence `source_ref.line/hash` refers to the decompressed JSONL lines.
 
-来源线索由 `evidence.origin` 保存。DSH 使用原生 `source.kind`，Claude 部分封装使用 `wrapper_pattern`；两者都不构成独立身份认证。所有用户通道记录均保留在阅读范围中。子会话的继承证据由 `evidence.inherited` 标明，snapshot 保存 `parent_session_id/inherited_events`；继承范围与本会话新增范围分别报告，不能把父历史当作子会话新增纠错。
+Source clues are saved in `evidence.origin`. DSH uses native `source.kind`; some Claude wrappers use `wrapper_pattern`. Neither constitutes independent identity authentication. All user-channel records remain within the reading scope. Inherited evidence in child sessions is marked with `evidence.inherited`, and snapshots save `parent_session_id/inherited_events`; inherited scope and additions made in the current session are reported separately, so parent history cannot be treated as new corrections made in a child session.
 
-端到端流程如下：
+The end-to-end process is:
 
 ```text
 sca register
-  → 建立稳定会话记录
+  → create a stable session record
 
 sca prepare
-  → 冻结 transcript 输入范围并生成 analysis packet
+  → freeze the transcript input range and generate an analysis packet
 
-宿主 Agent 分析 packet
-  → 产出结构化 submission JSON
+Host Agent analyzes the packet
+  → produce structured submission JSON
 
 sca ingest
-  → 校验用户消息与原生介入覆盖、引文、时序、编辑结果和运行身份
+  → validate coverage of user messages and native interventions, quotes, chronology, edit results, and run identity
 
 sca review
-  → 人工 approve / reject / edit_content / revoke / supersede
+  → human approve / reject / edit_content / revoke / supersede
 
 copy_content / export_content
-  → 输出已批准规则，由用户决定写入位置
+  → output approved rules; the user decides where to place them
 
 sca adopt / sca rules
-  → 登记、查询、修订或撤销长期规则
+  → register, query, revise, or revoke durable rules
 ```
 
-更完整的实现分析，包括输入冻结、Evidence、返工提示、租约、两文件提交和审核状态机，参见 [`TOOL_DESIGN_ANALYSIS.md`](TOOL_DESIGN_ANALYSIS.md)。
+For a more complete implementation analysis—including input freezing, Evidence, rework hints, leases, two-file commits, and the review state machine—see [`TOOL_DESIGN_ANALYSIS.md`](TOOL_DESIGN_ANALYSIS.md).
 
-## 核心保证
+## Core guarantees
 
-- **固定输入**：`prepare` 绑定 transcript 的明确字节前缀；仅在尾部追加不会改变本轮已经冻结的输入。
-- **逐目标阅读回执**：用户消息通过 `processed_users` 覆盖 `user_coverage`，原生中断和审批通过 `processed_interventions` 覆盖 `intervention_coverage`，两类目标分别处理。原生介入缺回执或存在不确定回执时，结果保留 partial。
-- **标签有证据约束**：episode 至少检测到纠错或执行介入；负例仅提交阅读回执。原生介入锚点只能标介入，须引用自身证据，不能标成文字纠错。审批不自动判为拒绝或真人操作；纯需求变化的返工不独立提交。
-- **引文可验证**：候选引用的 Evidence ID 必须存在，引文必须逐字命中可引用正文。
-- **时序可验证**：纠错前行为必须发生在用户锚点之前，纠错后行为必须发生在之后。
-- **返工有事实下限**：声称已完成代码返工时，必须存在纠错前后的成功编辑及相交文件路径。DSH 的 `edit/write` 使用结构化路径，结果按原生状态判定；`TOOL_OUTCOME_UNKNOWN`、shell 描述或模型声称完成都不能作为成功编辑证据。
-- **模型不能自我批准**：模型只提交语义分析结果，不能提交 `approved`、`published` 等权威状态。
-- **批准绑定内容版本**：候选内容变化后，旧批准自动失效。
-- **并发写入受控**：租约、generation fencing token、revision、文件锁和幂等请求用于防止陈旧结果覆盖新状态。
-- **规则可逆**：候选可以拒绝或撤销，已采纳规则可以修订或撤销，并保留来源和历史。
-- **失败不污染既有记录**：ingest 校验失败时拒绝提交，不用不完整结果覆盖已保存状态。
+- **Fixed input**: `prepare` binds to a specific byte prefix of the transcript; appending only at the end does not change the input already frozen for this run.
+- **Reading receipts per target**: user messages are covered by `processed_users` against `user_coverage`; native interruptions and approvals are covered by `processed_interventions` against `intervention_coverage`. The two classes of targets are handled separately. If a native intervention has a missing or uncertain receipt, the result remains partial.
+- **Evidence-constrained labels**: an episode must detect at least a correction or execution intervention; negative cases submit only reading receipts. A native intervention anchor can only be labeled as an intervention, must cite its own evidence, and cannot be labeled as a textual correction. An approval is not automatically classified as a refusal or a human operation; rework arising solely from a change in requirements is not submitted independently.
+- **Verifiable quotes**: Evidence IDs cited by candidates must exist, and quotes must match citable text verbatim.
+- **Verifiable chronology**: behavior before a correction must precede the user anchor, and behavior after it must follow the anchor.
+- **Factual floor for rework**: a claim that code rework was completed requires successful edits before and after the correction, with overlapping file paths. DSH `edit/write` uses structured paths and determines outcomes from native status; `TOOL_OUTCOME_UNKNOWN`, shell descriptions, or a model's claim of completion cannot count as evidence of a successful edit.
+- **No model self-approval**: models submit only semantic analysis results; they cannot submit authoritative states such as `approved` or `published`.
+- **Approval bound to a content version**: changing candidate content automatically invalidates its previous approval.
+- **Controlled concurrent writes**: leases, generation fencing tokens, revisions, file locks, and idempotent requests prevent stale results from overwriting newer state.
+- **Reversible rules**: candidates can be rejected or revoked; adopted rules can be revised or revoked while retaining their provenance and history.
+- **Failures do not contaminate existing records**: failed ingest validation rejects the submission rather than overwriting saved state with incomplete results.
 
-## 隐私与网络边界
+## Privacy and network boundaries
 
-- `sca` CLI 只负责本地读写与校验，不发起模型请求，也不主动上传 transcript；analysis packet 是否发送给远程模型，取决于 Claude Code、Codex 等宿主的配置。
-- 首次通过 `npx` 获取 CLI 或安装依赖时可能访问 npm registry。SCA 不会自动写入 harness 入口、专项规范、lint 配置、Agent 记忆或其他外部系统。
-- 本地数据包含会话证据和候选内容，请妥善保护 `SCA_DATA_ROOT`，避免误提交到代码仓库。
+- The `sca` CLI only performs local reading, writing, and verification. It does not make model requests or proactively upload transcripts; whether an analysis packet is sent to a remote model depends on the configuration of hosts such as Claude Code and Codex.
+- Obtaining the CLI through `npx` for the first time or installing dependencies may contact the npm registry. SCA does not automatically write to harness entry points, specialized conventions, lint configuration, Agent memory, or other external systems.
+- Local data contains session evidence and candidate content. Protect `SCA_DATA_ROOT` and avoid accidentally committing it to a code repository.
 
-## 能力边界
+## Limitations
 
-- 支持 DSH v4；v0/v3 和 DSH marker 定位尚未支持。显式会话目录选最高规范版本，未知版本不回退；同版本多编码须指定文件。
-- compaction、缺失流式提交、未知事件或无法读取的非文本内容会使来源覆盖率为 partial。文本流和工具流分别检查完整性，同一步的文本提交不能代替工具调用提交。
-- CLI 能验证引文、时序和编辑事实，但语义判断质量仍取决于宿主模型。
-- 返工分析基于 transcript 中的编辑、路径和文本指纹，只提供事实下限，不是 AST 级语义证明。
-- SCA 不自动批准或发布规则，也暂不提供跨会话去重、冲突检测、规则老化复审和效果评估。
-- SCA 不是通用记忆系统；Markdown 存储便于审计，但不适合大规模聚合查询，不同 `data-root` 也不会自动合并。
+- DSH v4 is supported; v0/v3 and DSH marker-based discovery are not yet supported. An explicit session directory selects the highest canonical version without falling back from an unknown version; if multiple encodings exist for the same version, specify a file.
+- Compaction, missing stream commits, unknown events, or unreadable non-text content can leave source coverage partial. Text streams and tool streams are checked for completeness separately; a text commit in the same step cannot substitute for a tool-call commit.
+- The CLI can verify quotes, chronology, and editing facts, but the quality of semantic judgment still depends on the host model.
+- Rework analysis relies on edits, paths, and text fingerprints in the transcript. It provides only a factual floor, not an AST-level semantic proof.
+- SCA does not automatically approve or publish rules. Cross-session deduplication, conflict detection, rule-aging review, and effectiveness evaluation are not yet provided.
+- SCA is not a general-purpose memory system. Markdown storage makes auditing easy but is not suited to large-scale aggregate queries; separate `data-root` directories are not automatically merged.
 
-## 手动 CLI 工作流
+## Manual CLI workflow
 
-下面的命令与 Skill 在后台执行的是同一条链路，适合脚本化或调试。`sca` 可来自全局安装，或替换为 `npx -y session-correction-analysis`；源码开发使用 `npm run build` 后的 `node dist/src/cli.js`。未发布改动使用本地构建或测试包。
+The commands below follow the same process that the Skill performs in the background and are suitable for scripting or debugging. `sca` may come from a global installation, or be replaced with `npx -y session-correction-analysis`; source development uses `node dist/src/cli.js` after `npm run build`. Use a local build or test package for unpublished changes.
 
-登记时按来源选择 `--host`：
+Choose `--host` according to the source when registering:
 
-| 会话来源 | `--host` | `--transcript` |
+| Session source | `--host` | `--transcript` |
 |---|---|---|
-| Codex | `codex` | 明确的 transcript 文件 |
-| Claude Code | `claude` | 明确的 transcript 文件 |
-| DeepSeek Harness（DSH） | `dsh` | v4 `.jsonl`、`.jsonl.zstd` 文件或单个会话目录 |
+| Codex | `codex` | Explicit transcript file |
+| Claude Code | `claude` | Explicit transcript file |
+| DeepSeek Harness (DSH) | `dsh` | v4 `.jsonl`, `.jsonl.zstd` file, or a single session directory |
 
-session ID 必须与源文件核验。DSH 提供 cwd 时核验工作区，成功记录为 `workspace_verification: matched`；缺少 cwd 时允许导入，工作区来自注册参数并记录 `unavailable`；未请求工作区核验时为 `not_requested`。不得按标题或最新历史猜测身份。
+The session ID must be verified against the source file. When DSH provides a cwd, the workspace is checked; successful verification is recorded as `workspace_verification: matched`. If cwd is missing, import is allowed, the workspace comes from the registration argument, and verification is recorded as `unavailable`. When workspace verification was not requested, the result is `not_requested`. Do not guess identity from the title or most recent history.
 
-### 单会话分析
+### Single-session analysis
 
 ```bash
-# 0. 环境自检
+# 0. Check the environment
 sca doctor
 
-# 1. 定位当前会话（仅 Codex / Claude；已有路径或 DSH 来源跳过）
+# 1. Locate the current session (Codex / Claude only; skip if the path is already known or for DSH)
 sca discover --host codex \
   --marker sca-probe-<uuidv4> \
   --workspace <workspace_path>
 
-# 2. 登记源会话（按上表选择 host；DSH 可传压缩文件或会话目录）
+# 2. Register the source session (choose the host from the table above; DSH accepts a compressed file or session directory)
 sca register --host codex \
   --session <session_id> \
   --workspace <workspace_path> \
   --transcript <transcript.jsonl>
 
-# 3. 冻结输入并生成 packet
+# 3. Freeze input and generate the packet
 sca prepare <record_id>
 
-# 4. 宿主 Agent 按 Skill 分析 packet，产出 submission.json
+# 4. Host Agent analyzes the packet according to the Skill and produces submission.json
 
-# 5. 校验并提交分析结果
+# 5. Validate and submit the analysis result
 sca ingest <record_id> \
   --run <run_id> \
   --submission submission.json
 
-# 6. 查看和审核候选
+# 6. View and review candidates
 sca review <record_id>
 sca review <record_id> --candidate <candidate_id>
 
-# 7. 导出已批准内容
+# 7. Export approved content
 sca review <record_id> --action export_content \
   --candidate <candidate_id> \
   --out ./rule.md
 
-# 8. 可选：登记到长期规则账本
+# 8. Optional: register it in the long-term rules ledger
 sca adopt <record_id> --candidate <candidate_id> \
   --request <uuid> \
   --expected-revision <revision>
 ```
 
-`--request` 应使用全局唯一编号，建议使用 UUID。同一次操作重试必须沿用相同编号和参数；新的操作应使用新的编号。并发更新还必须提供命令当前返回的 `--expected-revision`。
+Use a globally unique `--request` identifier, preferably a UUID. Retries of the same operation must reuse the same identifier and arguments; use a new identifier for a new operation. Concurrent updates must also supply the `--expected-revision` currently returned by the command.
 
-如果不知道某条命令的完整参数，直接运行：
+If you do not know the full arguments of a command, run:
 
 ```bash
 sca
 ```
 
-### 批次分析
+### Batch analysis
 
-用户明确授权多个来源时，使用 `sca batch`，并指定独立的私有 `--data-root`。支持 Codex、Claude Code 和 DSH 来源；批次目录与单会话记录分开保存。
+When the user explicitly authorizes multiple sources, use `sca batch` and specify a separate private `--data-root`. Codex, Claude Code, and DSH sources are supported; batch directories are stored separately from single-session records.
 
-- `create|append|diff`：冻结显式来源、追加新来源到新批次、查询事件差异。
-- `page|tasks|task-context`：按字节预算读取证据，规划分析目标与上下文，保留分页检查点。
-- `claim|heartbeat|queue|task-submit|finish`：管理 worker 租约、恢复状态和受租约校验的增量提交。
-- `submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`：提交语义判断，查询覆盖、用量、复核清单、预算、身份线索、编辑配对和待审核候选。
+- `create|append|diff`: freeze explicit sources, append new sources to a new batch, and query event differences.
+- `page|tasks|task-context`: read evidence within a byte budget, plan analysis targets and context, and preserve pagination checkpoints.
+- `claim|heartbeat|queue|task-submit|finish`: manage worker leases, recovery state, and incremental submissions checked against leases.
+- `submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`: submit semantic judgments and query coverage, usage, review checklists, budgets, identity clues, edit pairings, and candidates awaiting review.
 
-每个目标都须实际审阅。来源增长使用新 batch ID；不自动继承语义判断、归并父子会话或批准候选。worker 由宿主提供，CLI 不自动调用模型；语义复用和单会话候选审核桥接尚未实现。
+Every target must actually be reviewed. Growth in source data uses a new batch ID; semantic judgments are not inherited automatically, parent and child sessions are not merged, and candidates are not approved automatically. Workers are provided by the host; the CLI does not automatically call a model. Semantic reuse and a bridge to single-session candidate review have not yet been implemented.
 
-操作字段见[批次协议](skills/session-correction-analysis/references/BATCH_PROTOCOL.md)，连续执行与检查点见[执行指南](skills/session-correction-analysis/references/BATCH_EXECUTION.md)，故障处理见[恢复手册](skills/session-correction-analysis/references/BATCH_RECOVERY.md)。
+For operation fields, see the [batch protocol](skills/session-correction-analysis/references/BATCH_PROTOCOL.md); for continuous execution and checkpoints, see the [execution guide](skills/session-correction-analysis/references/BATCH_EXECUTION.md); for failure handling, see the [recovery manual](skills/session-correction-analysis/references/BATCH_RECOVERY.md).
 
-## 数据目录
+## Data directory
 
-默认数据目录为 `~/.session-correction-analysis/`。可以通过 `--data-root <path>` 或环境变量 `SCA_DATA_ROOT` 覆盖。
+The default data directory is `~/.session-correction-analysis/`. Override it with `--data-root <path>` or the `SCA_DATA_ROOT` environment variable.
 
 ```text
 ~/.session-correction-analysis/
@@ -449,126 +469,133 @@ sca
     └── locks/
 ```
 
-- `accepted_rules.md`：跨会话规则账本，记录采纳、修订和撤销历史。
-- `analyze.md`：源会话身份、分析状态、租约、episode 和事实摘要。
-- `learning_candidates.md`：候选正文、来源、审核历史和 revision。
-- `runtime/packets/`：`prepare` 生成的冻结分析包，可重建，不属于长期业务事实。
-- `runtime/locks/`：会话记录和规则注册表使用的协作式文件锁。
+- `accepted_rules.md`: cross-session rules ledger recording adoption, revision, and revocation history.
+- `analyze.md`: source session identity, analysis status, leases, episodes, and factual summaries.
+- `learning_candidates.md`: candidate text, provenance, review history, and revision.
+- `runtime/packets/`: frozen analysis packets generated by `prepare`; these can be rebuilt and are not long-term business facts.
+- `runtime/locks/`: cooperative file locks used by session records and the rules registry.
 
-`record_id` 由宿主、规范化 workspace 和源 session ID 共同派生。同一会话改标题、跨月续聊或重新分析，仍会落到同一稳定记录目录。
+`record_id` is derived jointly from the host, normalized workspace, and source session ID. Changing the title of a session, continuing it in another month, or analyzing it again still leads to the same stable record directory.
 
-Markdown 文件可以直接阅读，但应只通过 CLI 修改。可以使用下面的命令进行只读一致性检查：
+Markdown files can be read directly, but should only be modified through the CLI. Run these commands for read-only consistency checks:
 
 ```bash
 sca validate <record_id>
 sca validate --all
 ```
 
-## 常用命令
+## Common commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 |---|---|
-| `sca doctor` | 检查 Node.js、PATH 和数据目录可写性 |
-| `sca discover` | 使用 marker 探针定位当前会话 transcript |
-| `sca register` | 校验并登记一个源会话 |
-| `sca prepare` | 冻结输入、领取租约并生成 analysis packet |
-| `sca ingest` | 校验并提交 Agent 的结构化分析结果 |
-| `sca review` | 列出候选、查看证据并执行人工审核操作 |
-| `sca review ... --action copy_content` | 输出已批准候选的可复制 Markdown |
-| `sca review ... --action export_content` | 将已批准候选导出到指定文件 |
-| `sca adopt` | 把已批准候选登记到 `accepted_rules.md` |
-| `sca rules` | 查询规则列表、详情或执行撤销 |
-| `sca validate` | 只读检查记录和事务状态的一致性 |
+| `sca doctor` | Check Node.js, PATH, and data-directory writability |
+| `sca discover` | Locate the current session transcript using a marker probe |
+| `sca register` | Verify and register a source session |
+| `sca prepare` | Freeze input, acquire a lease, and generate an analysis packet |
+| `sca ingest` | Validate and submit the Agent's structured analysis result |
+| `sca review` | List candidates, inspect evidence, and carry out human review actions |
+| `sca review ... --action copy_content` | Output copyable Markdown for an approved candidate |
+| `sca review ... --action export_content` | Export an approved candidate to a specified file |
+| `sca adopt` | Register an approved candidate in `accepted_rules.md` |
+| `sca rules` | Query the rule list or details, or perform revocation |
+| `sca validate` | Read-only consistency check of records and transaction state |
 
-常见审核操作：
+Common review actions:
 
-| 操作 | 含义 |
+| Action | Meaning |
 |---|---|
-| `approve` | 批准候选当前内容版本 |
-| `reject` | 拒绝候选 |
-| `edit_content` | 人工修改候选正文或相关内容 |
-| `revoke` | 撤销已有批准 |
-| `supersede` | 使用新候选替代旧候选 |
-| `copy_content` | 输出已批准内容以便复制 |
-| `export_content` | 将已批准内容写入指定 Markdown 文件 |
+| `approve` | Approve the candidate's current content version |
+| `reject` | Reject a candidate |
+| `edit_content` | Manually edit candidate text or related content |
+| `revoke` | Revoke a previous approval |
+| `supersede` | Replace an old candidate with a new candidate |
+| `copy_content` | Output approved content for copying |
+| `export_content` | Write approved content to a specified Markdown file |
 
-CLI 退出码：
+CLI exit codes:
 
-| 退出码 | 含义 |
+| Exit code | Meaning |
 |---|---|
-| `0` | 成功 |
-| `1` | doctor 或 validate 发现诊断/一致性问题 |
-| `2` | 命令抛出已分类错误，JSON 写入 stdout |
-| `3` | 用法或参数解析错误 |
+| `0` | Success |
+| `1` | `doctor` or `validate` found a diagnostic/consistency issue |
+| `2` | The command raised a classified error, with JSON written to stdout |
+| `3` | Usage or argument parsing error |
 
-## 自动化与定时分析
+## Automation and scheduled analysis
 
-`sca` 不自带调度器，也不会由纯 cron 独立完成语义分析。自动化任务必须运行在能够调用模型的宿主 Agent 中，并复用同一个 Skill、CLI 和 submission schema。
+`sca` does not include a scheduler, and plain cron cannot complete semantic analysis independently. Automation tasks must run inside a host Agent capable of calling a model and reuse the same Skill, CLI, and submission schema.
 
-推荐的批处理策略是：
+A recommended batch-processing strategy is:
 
 ```text
-扫描 records/*/analyze.md
-  → 选择 analysis_status=pending 的记录
-  → 每条独立执行 prepare
-  → 宿主 Agent 分析 packet
-  → 执行 ingest
-  → 输出待人工审核的候选列表
+Scan records/*/analyze.md
+  → select records with analysis_status=pending
+  → run prepare separately for each
+  → host Agent analyzes the packet
+  → run ingest
+  → output the list of candidates awaiting human review
 ```
 
-自动化任务应遵守以下边界：
+Automation tasks should observe these boundaries:
 
-- 限制单次处理数量和 transcript 发现时间窗；
-- 跳过仍在写入、持有有效租约或存在未完成提交的记录；
-- 单条失败后记录原因并继续下一条，不覆盖既有状态；
-- 不自动执行 `approve`、`reject`、`edit_content`、`revoke` 或 `supersede`；
-- 不自动修改 harness 入口、专项规范、lint 约束或任何 Agent 记忆；
-- 只在产生新记录或新候选时通知用户审核。
+- Limit the number processed per run and the transcript discovery time window;
+- Skip records still being written, holding valid leases, or containing unfinished commits;
+- Record the reason for an individual failure and continue to the next record, without overwriting existing state;
+- Never automatically perform `approve`, `reject`, `edit_content`, `revoke`, or `supersede`;
+- Never automatically modify harness entry points, specialized conventions, lint constraints, or any Agent memory;
+- Notify the user for review only when new records or candidates have been produced.
 
-也就是说，定时任务可以自动完成“发现、准备、分析和提交”，但候选批准、规则导出和长期采纳仍由用户决定。
+In other words, a scheduled task may automatically “discover, prepare, analyze, and submit,” but candidate approval, rule export, and long-term adoption remain the user's decisions.
 
-可以在 Codex Automations、Claude Code 定时任务或其他具备模型能力的宿主中使用下面的提示词，并按实际数据目录、时间窗口和单批数量调整：
+You can use the following prompt in Codex Automations, Claude Code scheduled tasks, or another model-capable host. Adjust the data directory, time window, and per-batch limit as appropriate:
 
 ```text
-使用 session-correction-analysis Skill 执行一次定时会话纠错分析。本轮只负责发现、登记、
-分析和提交候选，绝不替用户审核或发布规则。
+Use the session-correction-analysis Skill to run one scheduled analysis of session corrections. This run
+is only responsible for discovering, registering, analyzing, and submitting candidates. Never review
+or publish rules on the user's behalf.
 
-1. 执行 sca doctor。若 Node.js、PATH 或数据目录检查失败，立即停止，只报告失败原因；
-   不要自行安装、升级或修改环境。
+1. Run sca doctor. If the Node.js, PATH, or data-directory check fails, stop immediately and report
+   only the reason for failure; do not install, upgrade, or modify the environment yourself.
 
-2. 扫描 ~/.session-correction-analysis/records/*/analyze.md 的 frontmatter：
-   - 选择 analysis_status=pending 的记录，按 created_at 升序最多取 3 条；
-   - 跳过 running、completed，以及 pending_commit 非空的记录；
-   - 不清理锁、不抢占有效租约，也不修改异常记录，必要时提示用户执行 sca validate。
+2. Scan the frontmatter of ~/.session-correction-analysis/records/*/analyze.md:
+   - Select records with analysis_status=pending, taking at most 3 in ascending created_at order;
+   - Skip running and completed records, and records with a nonempty pending_commit;
+   - Do not clear locks, seize valid leases, or modify abnormal records; suggest that the user
+     run sca validate when necessary.
 
-3. 如需补充未登记会话，只在明确的最近时间窗口内枚举当前宿主的 transcript：
-   - 跳过仍可能写入的文件；
-   - 只读取定位会话所需的元数据，获取 session_id、workspace 和 transcript 路径；
-   - 与现有 records 中的 session_id 去重；
-   - 最多补登记 3 条，不全量扫描历史，也不按会话标题或“最近使用”猜测。
+3. If additional unregistered sessions are needed, enumerate transcripts from the current host only
+   within an explicit recent time window:
+   - Skip files that may still be receiving writes;
+   - Read only the metadata needed to identify a session: session_id, workspace, and transcript path;
+   - Deduplicate against session_id values in existing records;
+   - Register at most 3 additional sessions. Do not scan all historical sessions or guess from
+     session titles or “most recently used.”
 
-4. 对每条记录依次执行：
+4. For each record in turn:
    sca prepare <record_id>
-   → 完整读取生成的 packet，包括 user_coverage 和 evidence
-   → 严格按 Skill schema 生成 submission JSON
+   → read the entire generated packet, including user_coverage and evidence
+   → generate submission JSON strictly according to the Skill schema
    → sca ingest <record_id> --run <run_id> --submission <submission_path>
 
-5. ingest 拒收时，根据错误信息修正 submission 一次；若仍失败，保留原状态并继续下一条，
-   不绕过 schema、Evidence、coverage、租约或 input hash 校验。
+5. If ingest rejects a submission, correct the submission once according to the error message.
+   If it still fails, preserve the original state and continue to the next record. Do not bypass
+   schema, Evidence, coverage, lease, or input-hash validation.
 
-6. 对成功完成的记录执行 sca review <record_id>，汇总 record_id、候选标题、候选数量、
-   revision，以及复核命令 sca review <record_id> --candidate <candidate_id>。
-   没有新增记录或候选时，只回复“无新增”。不要在报告中粘贴 transcript 原文。
+6. Run sca review <record_id> for successfully completed records. Summarize the record_id, candidate
+   titles, candidate count, revision, and review command
+   sca review <record_id> --candidate <candidate_id>.
+   If there are no new records or candidates, reply only “No new items.” Do not paste original
+   transcript text into the report.
 
-7. 严禁执行 approve、reject、edit_content、revoke、supersede、copy_content、
-   export_content、adopt 或 rules --revoke；严禁修改 AGENTS.md / CLAUDE.md 入口、
-   invariants / architecture / infrastructure 等专项规范、lint 约束、Agent 记忆、Skill 文件
-   或本提示词。所有候选必须留给用户人工审核。
+7. Never run approve, reject, edit_content, revoke, supersede, copy_content, export_content, adopt,
+   or rules --revoke. Never modify AGENTS.md / CLAUDE.md entry points, specialized conventions such
+   as invariants / architecture / infrastructure, lint constraints, Agent memory, Skill files, or
+   this prompt. All candidates must remain for the user's manual review.
 ```
 
-纯系统 cron 本身没有语义分析能力；如使用 crontab、launchd 等调度器，应由它调用 `claude -p`、`codex exec` 或其他宿主 Agent，并把上述提示词作为任务输入。
+Plain system cron has no semantic analysis capability of its own. If you use a scheduler such as crontab or launchd, have it invoke `claude -p`, `codex exec`, or another host Agent and pass the prompt above as the task input.
 
-发布前验证使用 `npm run verify:release`。该命令运行 lint、类型检查、单元测试、集成测试和真实 npm 包冒烟测试。机器必须安装 `zstd`，否则包冒烟测试会失败。此命令不会发布 npm 包或修改版本号。
+For pre-publication verification, run `npm run verify:release`. This runs lint, type checking, unit tests, integration tests, and a smoke test of the actual npm package. `zstd` must be installed on the machine or the package smoke test will fail. This command does not publish an npm package or change the version number.
 
 ## License
 

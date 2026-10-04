@@ -11,6 +11,7 @@
     "dist/src",
     "skills/session-correction-analysis/references",
     "README.md",
+    "README-zh.md",
     "LICENSE"
   ],
   "publishConfig": {

@@ -9,6 +9,7 @@
 
 # Root-level design/plan notes are kept local only
 /*.md
+!/README-zh.md
 
 # Agent skill packs stay local, not in the repo
 /.agents/
