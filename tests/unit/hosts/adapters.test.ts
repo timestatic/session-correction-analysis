@@ -16,6 +16,33 @@ function fixture(...parts: string[]): string {
   return path.join(FIXTURES, ...parts);
 }
 
+describe('Claude message origins', () => {
+  it('preserves all user coverage without treating transport role as human identity', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-origins-'));
+    try {
+      const file = path.join(dir, 'claude.jsonl');
+      const texts = ['请修改', '<local-command-stdout>done</local-command-stdout>',
+        '<task-notification>done</task-notification>',
+        'You are running as a local coding agent for a Melos workspace.\n[NEW COMMENT] Another agent (Reviewer) 不要修改'];
+      fs.writeFileSync(file, texts.map((text, index) => JSON.stringify({
+        type: 'user', uuid: `u${index}`, sessionId: 'origins', cwd: dir,
+        message: { content: text },
+      })).join('\n') + '\n');
+      const transcript = await adaptClaude(file);
+      assert.deepEqual(transcript.events.map((event) => event.origin?.kind),
+        ['unknown', 'tool_echo', 'host_generated', 'agent']);
+      const packet = await buildPacket({ recordId: 'a'.repeat(64), runId: 'run-origins',
+        analysisId: 'analysis-origins', transcriptPath: file, ruleVersion: 'test' });
+      assert.equal(packet.user_coverage.length, texts.length);
+      assert.deepEqual(packet.evidence.map((item) => item.origin?.kind),
+        ['unknown', 'tool_echo', 'host_generated', 'agent']);
+      for (const event of transcript.events) assert.ok(eventSchema.safeParse(event).success);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('codex adapter', () => {
   it('recognizes a standalone apply_patch wrapped in exec and keeps shell mentions as tool calls', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-codex-wrapper-'));

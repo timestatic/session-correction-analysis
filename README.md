@@ -8,9 +8,34 @@
 
 模型负责理解语义，CLI 负责冻结输入、验证证据和维护权威状态。候选规则不会自动写入 harness 文档体系或 Agent 记忆，也不会自动获得批准；用户可以在审核后决定将规则回流到入口文件、专项规范、lint 约束或记忆系统中的合适位置。
 
-## 实验性批次原型（本地未发布）
+协议边界：episode 至少检测到纠错或执行介入；负例通过 `processed_users` 或原生介入的 `processed_interventions` 留痕，纯需求变化的返工不独立提交。Claude 的 `user` 通道不代表真人：冻结证据可携带 `origin`（来源线索），封装模式匹配不是身份认证，缺失来源按 `unknown` 处理，所有用户通道记录仍须检视。候选详情的 `source_origin_counts` 按来源锚点统计，不等同于人工纠错总量。默认 `review --candidate` 不输出证据 excerpt；`--full` 显式读取全文，限长引文不等于脱敏。`doctor` 与候选详情报告实际安装包版本，本地修复未发布前不会改变 `npx` 下载的版本。
 
-新增 `batch --action create|append|diff|tasks|claim|task-context|heartbeat|queue|task-submit|finish|page|submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`，显式指定独立 `--data-root`。支持冻结多来源、无损字节预算分页、逐目标增量提交、修订历史和覆盖查询，不调用旧 ingest 或改变人工审核。来源增长需新 batch id。支持宿主提供 worker 的有界串行循环、按轮次上下文、同来源补充证据及分页检查点；模型自动调用、语义复用和旧候选桥接尚未实现。操作契约和完整能力边界见 [批次协议](<skills/session-correction-analysis/references/BATCH_PROTOCOL.md>)。本地先 build，用 `node dist/src/cli.js`；未发布前 npx 包不包含该能力。
+## DSH v4 历史会话接入
+
+支持 `--host dsh` 的显式历史会话，接受 DSH v4 的 `.jsonl` 和 `.jsonl.zstd` 文件。压缩输入要求 PATH 上有 `zstd`，`doctor` 会检查该能力。没有新增 npm 依赖。正式安装使用 `npx -y session-correction-analysis`；源码开发先运行 `npm run build`，再使用 `node dist/src/cli.js`。版本发布前，新增能力仅存在于本地构建或本地安装的测试包。macOS 可用 `brew install zstd` 安装解压工具。
+
+```bash
+npx -y session-correction-analysis doctor
+npx -y session-correction-analysis register --host dsh --session <文件头中的-id> --workspace <文件头中的-cwd> --transcript <会话文件或单个会话目录>
+npx -y session-correction-analysis prepare <record_id>
+```
+
+后续使用既有分析、ingest、review 和人工批准流程。分析 Skill 的发布入口仍为 `npx -y session-correction-analysis`。
+
+- 显式文件选择该版本快照；显式会话目录选择编号最高的规范版本。最高版本不是 v4 时拒绝，不静默回退；同一最高版本存在两种编码时要求指定文件。v0/v3 兼容和 DSH 当前会话 marker 定位属于后续阶段。
+- 文件头 ID 与注册参数核验；提供 cwd 时核验工作区。缺少 cwd 时允许导入，workspace 来自注册参数，`workspace_verification: unavailable` 明确表示无法从文件头核验；提供 cwd 但未请求工作区核验时为 `not_requested`，成功核验为 `matched`。不按会话标题或“最新文件”推断身份。目录名用于查找，不是身份认证。
+- 压缩字节先冻结，再有界解压为权限受限的临时 JSONL，读取结束后删除。源变化、压缩损坏或超时会拒绝本次读取。原始压缩字节和解压内容各限 64 MiB。
+- `source_fingerprint` 与 `cutoff_byte_offset` 指向原始压缩字节；`decoded_fingerprint` 与 `decoded_byte_length` 指向解压内容；证据的 `source_ref.line/hash` 指向解压后的原始 JSONL 行。两种坐标不混用。
+- 原生 `source.kind` 区分用户输入、Agent 消息、宿主上下文及未知来源。它是来源线索，不是独立身份认证。所有 user-role 消息仍进入检查范围。
+- 原生中断和审批记录进入独立 `intervention_coverage`；提交 `processed_interventions` 覆盖该清单，用户文字仍由 `user_coverage/processed_users` 处理。原生锚点只能提交介入，必须引用自身证据，不能标成文字纠错。审批记录不自动判为拒绝或真人操作；用户中断、父取消和系统错误按原生原因区分。缺少介入回执或回执不确定时，提交结果保留 partial。
+- 流式片段不重复计入已提交正文。文本/推理与工具调用分别核对提交；没有 turn/step 的片段无法可靠配对，保留 partial。缺少对应提交、未知事件、不可读取的非文本内容或 compaction 会保守报告 partial。
+- 子会话保留父历史。`evidence.inherited` 标明继承证据；snapshot 保存父 ID 和继承事件数。继承内容可以解释上下文，不能当作子会话新增纠错。审核详情和批次状态分别显示继承与本次范围。
+- `edit/write` 提供结构化文件路径；工具结果按原生状态判定成败。`TOOL_OUTCOME_UNKNOWN` 不算成功。shell 描述和模型声称修改完成不构成成功编辑证据。
+- 本地实验批次入口也接受显式 DSH v4 来源。仍须逐目标审阅，不自动批准、不自动归并父子会话、不继承语义标签。
+
+## 实验性批次原型
+
+新增 `batch --action create|append|diff|tasks|claim|task-context|heartbeat|queue|task-submit|finish|page|submit|status|usage|audit|budget|identity|rework|candidates|candidate-detail`，显式指定独立 `--data-root`。支持冻结多来源、无损字节预算分页、逐目标增量提交、修订历史和覆盖查询，不调用旧 ingest 或改变人工审核。来源增长需新 batch id。支持宿主提供 worker 的有界串行循环、按轮次上下文、同来源补充证据及分页检查点；模型自动调用、语义复用和旧候选桥接尚未实现。操作契约和完整能力边界见 [批次协议](<skills/session-correction-analysis/references/BATCH_PROTOCOL.md>)。正式安装使用 `npx -y session-correction-analysis`；源码开发使用构建入口，未发布改动仍需本地测试包。
 
 批次执行接口与恢复示例见 [执行指南](skills/session-correction-analysis/references/BATCH_EXECUTION.md)。
 
@@ -539,6 +564,8 @@ CLI 退出码：
 ```
 
 纯系统 cron 本身没有语义分析能力；如使用 crontab、launchd 等调度器，应由它调用 `claude -p`、`codex exec` 或其他宿主 Agent，并把上述提示词作为任务输入。
+
+发布前验证使用 `npm run verify:release`。该命令运行 lint、类型检查、单元测试、集成测试和真实 npm 包冒烟测试。机器必须安装 `zstd`，否则包冒烟测试会失败。此命令不会发布 npm 包或修改版本号。
 
 ## License
 

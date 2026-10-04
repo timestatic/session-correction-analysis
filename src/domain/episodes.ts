@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { episodeIdSchema, isoDateTimeSchema } from './ids.js';
-import { eventSourceRefSchema } from './events.js';
+import { eventSourceRefSchema, originSchema } from './events.js';
 
 export const confidenceSchema = z.enum(['high', 'medium', 'low', 'uncertain']);
 export type Confidence = z.infer<typeof confidenceSchema>;
@@ -39,6 +39,8 @@ export const evidenceItemSchema = z
     kind: evidenceKindSchema,
     excerpt: z.string().min(1),
     source_ref: eventSourceRefSchema,
+    origin: originSchema.optional(),
+    inherited: z.boolean().optional(),
     truncated: z.boolean().default(false),
   })
   .strict();

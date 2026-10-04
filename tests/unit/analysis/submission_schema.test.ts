@@ -130,7 +130,10 @@ describe('submission JSON Schema mirror vs zod authority (design 22.3)', () => {
     assert.deepEqual(props['candidates']?.['items'], candidateSubmissionJsonSchema);
   });
 
-  it('zod stays the runtime authority for semantic rules the mirror cannot express', () => {
+  it('mirrors the label disjunction and rejects negative and rework-only episodes', () => {
+    assert.deepEqual(episodeSubmissionJsonSchema['anyOf'], ['correction', 'intervention'].map((label) => ({
+      properties: { [label]: { properties: { detected: { const: true } } } },
+    })));
     const baseCorrection = {
       detected: true,
       confidence: 'high',
@@ -152,6 +155,18 @@ describe('submission JSON Schema mirror vs zod authority (design 22.3)', () => {
       citations: [{ evidence_id: 'evt-1', quote: 'do it again' }],
     };
     assert.ok(episodeSubmissionSchema.safeParse(episodeFields).success, 'baseline must parse');
+    for (const correction of [false, true]) {
+      for (const intervention of [false, true]) {
+        for (const outcome of ['unknown', 'fixed']) {
+          const sample = {
+            ...episodeFields,
+            correction: { ...baseCorrection, detected: correction, rework: { outcome, evidence: [] } },
+            intervention: { ...baseIntervention, detected: intervention },
+          };
+          assert.equal(episodeSubmissionSchema.safeParse(sample).success, correction || intervention);
+        }
+      }
+    }
     assert.ok(
       !episodeSubmissionSchema.safeParse({ ...episodeFields, authority: 'model' }).success,
       'strict objects must refuse authority fields',
@@ -162,7 +177,7 @@ describe('submission JSON Schema mirror vs zod authority (design 22.3)', () => {
         correction: { ...baseCorrection, detected: false },
         intervention: { ...baseIntervention, detected: false },
       }).success,
-      'assertsALabel is enforced by zod only — the mirror cannot express it, so ingest re-validates through zod',
+      'negative episodes must be rejected by both contracts',
     );
   });
 });

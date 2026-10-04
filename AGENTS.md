@@ -30,7 +30,7 @@ git push && git push --tags
 约束：
 
 - `prepublishOnly` 钩子会自动跑 lint/typecheck/test/build 并 `chmod +x dist/src/cli.js`，**不要跳过或手动改版本号绕过**；钩子失败即发布失败，先修问题再重发（此时版本号已 bump，下一次 `npm version patch` 即可）
-- 发布内容仅含 `files` 白名单：`dist/src`、`README.md`、`LICENSE`；新增运行时代码若发布依赖，需同步确认 `files` 覆盖
+- 发布内容仅含 `files` 白名单：`dist/src`、`skills/session-correction-analysis/references`、`README.md`、`LICENSE`；新增运行时代码若发布依赖，需同步确认 `files` 覆盖
 - SKILL.md 中的命令入口必须保持 `npx -y session-correction-analysis` 写法，版本兼容由 CLI 的 packet schema / strict 校验兜底；改 CLI 命令或参数时同步更新 SKILL.md 与 README
 - `npm publish` 是对外不可逆操作：Agent 执行前必须先获得用户明确确认
 - 验证发布产物用 `npm run smoke:pkg`（`packaging/smoke-package.mjs`：真实 `npm pack` → 装进临时 prefix → 用装出来的 `sca` bin 跑 doctor→register→prepare→ingest→review→edit/approve→copy/export→adopt/rules/revoke→validate 全链路，临时目录用完即删）。它需要联网装依赖，属手动/CI 命令，不进本地提交门禁。只想看打包清单用 `npm pack --dry-run`，不需要真实发布

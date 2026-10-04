@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { sha256Hex, stableHash } from './hash.js';
 
-export const HOST_VALUES = ['codex', 'claude'] as const;
+export const HOST_VALUES = ['codex', 'claude', 'dsh'] as const;
 export const hostSchema = z.enum(HOST_VALUES);
 export type Host = z.infer<typeof hostSchema>;
 

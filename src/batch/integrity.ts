@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { isNativeIntervention } from '../domain/events.js';
 import { BatchReadContext } from './runtime.js';
 import { validateReworkClaim } from './rework-validation.js';
 import { ScaError } from '../domain/errors.js';
@@ -37,7 +38,7 @@ export function validateManifest(input: unknown): BatchManifest {
         const prior = evidence.get(indexed.reading_reuse_of);
         if (prior === undefined || prior.text !== text) reject('reading reuse is not an exact prior match');
       }
-      const target = indexed.event.kind === 'user_message';
+      const target = indexed.event.kind === 'user_message' || (source.input.host === 'dsh' && source.native_metadata?.intervention_targets === true && isNativeIntervention(indexed.event));
       evidence.set(id, { text, target, source: source.source_id });
       if (target) expectedTargets.set(`target-${stableHash(id).slice(7)}`, { source: source.source_id, evidence: id });
     }

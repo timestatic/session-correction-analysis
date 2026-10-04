@@ -32,7 +32,8 @@
     "test": "npm run build && node --test \"dist/tests/unit/**/*.test.js\"",
     "test:integration": "npm run build && node --test \"dist/tests/integration/**/*.test.js\"",
     "eval:offline": "npm run build && node dist/src/eval/offline.js",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && chmod +x dist/src/cli.js"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && chmod +x dist/src/cli.js",
+    "verify:release": "npm run lint && npm run typecheck && npm test && npm run test:integration && npm run smoke:pkg"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2",

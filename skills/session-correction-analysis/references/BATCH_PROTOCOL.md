@@ -27,7 +27,7 @@ runBatchWorker(root,id,claimInput,worker,signal?,budgetInput?)执行单次领取
 
 ## 本地开发入口
 
-先 `npm run build`，使用 `node dist/src/cli.js`。未发布前 npx 下载的包不具有本地新功能。
+正式安装使用 `npx -y session-correction-analysis`；本地未发布改动先 `npm run build`，使用 `node dist/src/cli.js` 或用户指定的测试包。
 
 ```bash
 node dist/src/cli.js batch --action create --input batch-input.json --data-root ./private-batch-data
@@ -218,3 +218,7 @@ node dist/src/cli.js batch --action audit --batch sample --input audit-options.j
 ## 连续执行与上下文扩展补充
 
 按轮次规划、runBatchLoop、task-context 和阅读检查点的完整接口见 [执行指南](BATCH_EXECUTION.md)。旧任务策略默认 adjacent，循环默认 turn。队列扩展字段 completed_evidence_ids 与 failure=partial_result 可选；新代码可读取旧队列，旧二进制不保证读取新扩展字段。扩展证据在同一任务身份下经 fence 持久化，不能据此改变目标或复用语义。只读 BatchReadContext 复用一次验证后的快照与索引；写入仍读取最新状态。
+
+### DSH 原生介入目标
+
+新 DSH 快照的 native_metadata.intervention_targets=true 将原生 interrupt/approval 纳入独立分析目标；不伪装成 user_message，不自动判阳性，origin 为来源声明。原生阳性只能标 intervention，不能标文字 correction。旧快照未声明该能力时保留原有用户消息目标集合，不悄悄补目标或改账本。父取消/系统错误不转换为用户中断。

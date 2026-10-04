@@ -1,5 +1,7 @@
 import { ScaError } from '../domain/errors.js';
 import { FORMAT_SNIFF_LINES } from '../domain/limits.js';
+import { adaptDsh } from './dsh.js';
+import { withFrozenTranscript } from './frozen.js';
 import { adaptClaude } from './claude.js';
 import { adaptCodex } from './codex.js';
 import { adaptNormalized } from './normalized.js';
@@ -21,17 +23,20 @@ export async function assertTranscriptIdentity(
   }
 }
 
-export type TranscriptFormat = 'codex' | 'claude' | 'normalized';
+export type TranscriptFormat = 'codex' | 'claude' | 'dsh' | 'normalized';
 
 /** Sniffs only the head of the file; unknown formats fail loudly instead of field guessing. */
 export async function detectFormat(filePath: string): Promise<TranscriptFormat> {
+  if (filePath.endsWith('.zstd')) return withFrozenTranscript(filePath, decoded => detectFormat(decoded));
   let inspected = 0;
   for await (const line of readJsonl(filePath)) {
     if (line.malformed) {
       continue;
     }
     inspected += 1;
+    if (typeof line.value !== 'object' || line.value === null || Array.isArray(line.value)) continue;
     const record = line.value as Record<string, unknown>;
+    if (record['type'] === 'session' && typeof record['version'] === 'number') return 'dsh';
     if (record['type'] === 'session_meta' || record['type'] === 'response_item' || record['type'] === 'event_msg') {
       return 'codex';
     }
@@ -52,17 +57,21 @@ export async function detectFormat(filePath: string): Promise<TranscriptFormat> 
 }
 
 export async function adaptTranscript(filePath: string): Promise<NormalizedTranscript> {
+  if (filePath.endsWith('.zstd')) return withFrozenTranscript(filePath, decoded => adaptTranscript(decoded));
   const format = await detectFormat(filePath);
   switch (format) {
     case 'codex':
       return adaptCodex(filePath);
     case 'claude':
       return adaptClaude(filePath);
+    case 'dsh':
+      return adaptDsh(filePath);
     case 'normalized':
       return adaptNormalized(filePath);
   }
 }
 
+export { adaptDsh };
 export { adaptCodex } from './codex.js';
 export { adaptClaude } from './claude.js';
 export { adaptNormalized } from './normalized.js';

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { z } from 'zod';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
@@ -13,6 +14,7 @@ import { prepareRecord } from './analysis/prepare.js';
 import { runBatchCommand } from './batch/cli.js';
 import { ingestSubmission } from './analysis/ingest.js';
 import { adaptTranscript, assertTranscriptIdentity } from './hosts/index.js';
+import { resolveDshTranscript } from './hosts/dsh-paths.js';
 import { discoverSession } from './hosts/discover.js';
 import { applyDecision, type DecisionRequest } from './review/decide.js';
 import { adoptCandidate, revokeRule } from './rules/adopt.js';
@@ -29,7 +31,8 @@ import { RecordRepository, type RegisterInput } from './store/repository.js';
 import { readBoundedFile, readBoundedText } from './store/bounded.js';
 import { PENDING_COMMIT_MAX_BYTES } from './domain/limits.js';
 
-export const CLI_VERSION = '0.1.0';
+export const CLI_VERSION: string = z.object({ version: z.string().min(1) })
+  .parse(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as unknown).version;
 
 /** Must stay in sync with package.json `engines.node`. No upper bound: newer majors are supported until proven otherwise. */
 export const MIN_NODE_MAJOR = 22;
@@ -242,6 +245,9 @@ async function doctorCommand(values: ParsedArgs['values'], io: CliIo): Promise<n
   const paths = resolvePaths(root === undefined || root.length === 0 ? undefined : root);
   checks.push(await dataRootCheck(paths.recordsDir, paths.runtimeDir));
   checks.push(await packageCheck());
+  const zstdReachable = await Promise.all(pathEntries.map(async dir => fs.access(path.join(dir, 'zstd'), 1).then(() => true).catch(() => false)));
+  checks.push({ name: 'dsh_zstd', status: zstdReachable.includes(true) ? 'ok' : 'warn',
+    detail: 'DSH v4 explicit imports support JSONL and JSONL.zstd; compressed imports require the zstd executable on PATH.' });
   checks.push({
     name: 'host_capabilities',
     status: 'warn',
@@ -317,7 +323,7 @@ async function registerCommand(values: ParsedArgs['values'], io: CliIo): Promise
   const workspace = getString(values, 'workspace');
   const transcript = getString(values, 'transcript');
   if (!hostResult.success || sessionId === undefined || workspace === undefined || transcript === undefined) {
-    throw new ScaError('schema_invalid', 'register requires --host codex|claude, --session, --workspace, --transcript');
+    throw new ScaError('schema_invalid', 'register requires --host codex|claude|dsh, --session, --workspace, --transcript');
   }
   const triggerResult = triggerSchema.safeParse(getString(values, 'trigger') ?? 'manual_skill');
   if (!triggerResult.success) {
@@ -325,7 +331,7 @@ async function registerCommand(values: ParsedArgs['values'], io: CliIo): Promise
   }
   const host = hostResult.data;
   const trigger = triggerResult.data;
-  const transcriptPath = path.resolve(transcript);
+  const transcriptPath = host === 'dsh' ? await resolveDshTranscript(transcript) : path.resolve(transcript);
   try {
     const stat = await fs.stat(transcriptPath);
     if (!stat.isFile()) {
@@ -409,6 +415,8 @@ async function prepareCommand(
       pending_limit_bytes: PENDING_COMMIT_MAX_BYTES,
       analyze_doc_bytes: analyzeDocBytes,
       user_message_count: outcome.packet.user_coverage.length,
+      intervention_target_count: outcome.packet.intervention_coverage?.length ?? 0,
+      ...(outcome.packet.snapshot.workspace_verification === undefined ? {} : { workspace_verification: outcome.packet.snapshot.workspace_verification }),
       blocks: outcome.packet.blocks.length,
       existing_candidate_count: outcome.packet.existing_candidates.length,
       changed_since_last_analysis: outcome.changed_since_last_analysis,
@@ -534,10 +542,26 @@ async function reviewCommand(
           quote: reviewExcerpt(citation.quote, 240),
         })),
       })),
-      evidence: detail.provenance.evidence.map(({ id: evidenceId, kind }) => ({ id: evidenceId, kind })),
+      evidence: detail.provenance.evidence.map(({ id: evidenceId, kind, origin, inherited }) => ({
+        id: evidenceId, kind, ...(inherited === undefined ? {} : { inherited }), origin: origin ?? { kind: 'unknown', basis: 'unavailable' },
+      })),
       missing_ids: detail.provenance.missing_ids,
     };
-    io.stdout(JSON.stringify({ ok: true, command: 'review', record_id: id, ...detail, provenance }));
+    const origins = detail.provenance.episodes.reduce<Record<string, number>>((counts, episode) => {
+      const anchor = detail.provenance.evidence.find((item) => item.id === episode.anchor_event_id);
+      const kind = anchor?.origin?.kind ?? 'unknown';
+      counts[kind] = (counts[kind] ?? 0) + 1;
+      return counts;
+    }, {});
+    io.stdout(JSON.stringify({
+      ok: true, command: 'review', version: CLI_VERSION, record_id: id,
+      revision: detail.revision, candidate: detail.candidate, allowed_actions: detail.allowed_actions,
+      source_origin_counts: origins,
+      episode_scope_counts: {
+        inherited: detail.provenance.episodes.filter(episode => detail.provenance.evidence.find(item => item.id === episode.anchor_event_id)?.inherited === true).length,
+        local: detail.provenance.episodes.filter(episode => detail.provenance.evidence.find(item => item.id === episode.anchor_event_id)?.inherited !== true).length,
+      }, provenance,
+    }));
     return 0;
   }
 
@@ -817,7 +841,7 @@ Commands (Phase 1):
             sca discover --host codex|claude --marker sca-probe-<uuidv4>
               [--workspace <path>] [--home <dir>]  (home defaults to $HOME)
   register  Create or reuse records/<record_id>/ skeletons for one session.
-            --host codex|claude --session <id> --workspace <path> --transcript <path>
+            --host codex|claude|dsh --session <id> --workspace <path> --transcript <path>
             [--trigger session_end|manual_skill|scheduled_drain|explicit_import] [--title <t>]
             [--project <name>] [--analyzer-version <v>]
   validate  Read-only schema/identity/count checks over records.

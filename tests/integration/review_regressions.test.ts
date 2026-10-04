@@ -86,6 +86,10 @@ it('keeps transcript excerpts out of default candidate review and exposes them o
   };
   const compact = await review(false);
   assert.ok(!compact.includes(privateExcerpt));
+  const compactObject = JSON.parse(compact) as { provenance: { evidence: Record<string, unknown>[] }; source_origin_counts: Record<string, number>; version: string };
+  assert.ok(compactObject.provenance.evidence.every((item) => !('excerpt' in item)));
+  assert.equal(compactObject.source_origin_counts['unknown'], 1);
+  assert.ok(compactObject.version.length > 0);
   assert.match(compact, /"status":"available"/);
   assert.match(compact, /"issue_anchor":"wrong-file"/);
   assert.match(compact, /分析者判断：纠正了修改对象/);

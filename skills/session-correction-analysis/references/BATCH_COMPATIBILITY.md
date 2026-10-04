@@ -2,7 +2,7 @@
 
 ## 隔离而非旧记录迁移
 
-新batch/v1命令仅在显式data-root的batches目录保存冻结manifest、增量ledger、queue和lineage。现有register/prepare/ingest/review及人工审核状态不由批次接口调用或转换。不会自动扫描records，不将completed当作语义覆盖，不生成旧record候选。该原型未发布，使用本地build入口；npx仍获取已发布版本。
+新batch/v1命令仅在显式data-root的batches目录保存冻结manifest、增量ledger、queue和lineage。现有register/prepare/ingest/review及人工审核状态不由批次接口调用或转换。不会自动扫描records，不将completed当作语义覆盖，不生成旧record候选。该原型仍为实验性能力，使用本地build入口；npx仍获取已发布版本。
 
 ## 现有协议限制
 

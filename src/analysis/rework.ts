@@ -74,6 +74,11 @@ function classifySuccess(text: string): boolean | undefined {
   return undefined;
 }
 
+export function toolResultSuccess(event: Event): boolean | undefined {
+  if (event.tool_status !== undefined) return event.tool_status === 'unknown' ? undefined : event.tool_status === 'succeeded';
+  return classifySuccess(event.text ?? '');
+}
+
 /** Evidence and events arrive parallel from the frozen packet (same order). */
 export function computeEditSignals(
   evidence: readonly EvidenceItem[],
@@ -93,8 +98,8 @@ export function computeEditSignals(
         line: event.source_ref.line ?? 0,
         role: 'change',
         ...(event.call_id !== undefined ? { call_id: event.call_id } : {}),
-        paths: extractPaths(text),
-        region_keys: extractRegionKeys(text),
+        paths: event.edit?.paths ?? extractPaths(text),
+        region_keys: event.edit?.region_keys ?? extractRegionKeys(text),
       });
     } else if (event.kind === 'tool_result') {
       const text = event.text ?? '';
@@ -106,7 +111,7 @@ export function computeEditSignals(
         ...(event.call_id !== undefined ? { call_id: event.call_id } : {}),
         paths: extractPaths(text),
         region_keys: [],
-        success: classifySuccess(text),
+        success: toolResultSuccess(event),
       });
     }
   }
@@ -117,9 +122,11 @@ export function computeEditSignals(
     if (change.role !== 'change' || change.call_id === undefined) {
       continue;
     }
-    const result = signals.find(
-      (candidate) => candidate.role === 'result' && candidate.call_id === change.call_id,
-    );
+    const results = signals.filter(candidate => candidate.role === 'result' && candidate.call_id === change.call_id);
+    const result = results[0];
+    if (events.some(event => event.kind === 'tool_result' && event.call_id === change.call_id && event.tool_status !== undefined) &&
+        (results.length !== 1 || signals.filter(candidate => candidate.role === 'change' && candidate.call_id === change.call_id).length !== 1 ||
+          result === undefined || result.line <= change.line)) continue;
     if (result?.success === false) {
       change.success = false;
     } else if (result !== undefined && result.success === true) {

@@ -18,6 +18,9 @@ const closed = { type: 'object', additionalProperties: false } as const;
 export const episodeSubmissionJsonSchema: JsonSchemaObject = {
   ...closed,
   required: ['anchor_event_id', 'issue_anchor', 'correction', 'intervention', 'citations'],
+  anyOf: ['correction', 'intervention'].map((label) => ({
+    properties: { [label]: { properties: { detected: { const: true } } } },
+  })),
   properties: {
     anchor_event_id: evidenceIdJson,
     issue_anchor: { type: 'string', minLength: 1, maxLength: 200 },
@@ -101,6 +104,10 @@ export const submissionJsonSchema: JsonSchemaObject = {
   properties: {
     episodes: { type: 'array', items: episodeSubmissionJsonSchema },
     candidates: { type: 'array', items: candidateSubmissionJsonSchema },
+    processed_interventions: { type: 'array', items: {
+      ...closed, required: ['evidence_id', 'status'],
+      properties: { evidence_id: evidenceIdJson, status: { enum: ['reviewed', 'uncertain'] } },
+    } },
     processed_users: { type: 'array', items: {
       ...closed,
       required: ['evidence_id', 'status'],

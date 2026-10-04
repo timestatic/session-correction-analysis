@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Candidate } from '../domain/candidates.js';
-import { eventSchema, type Event } from '../domain/events.js';
+import { eventSchema, isNativeIntervention, type Event } from '../domain/events.js';
 import { ScaError } from '../domain/errors.js';
 import { evidenceItemSchema, type EvidenceItem, type EvidenceKind } from '../domain/episodes.js';
 import { sha256Hex, stableHash, stableStringify, type Sha256Hash } from '../domain/hash.js';
@@ -17,6 +17,8 @@ import { assertTranscriptIdentity, detectFormat } from '../hosts/index.js';
 import { adaptClaude } from '../hosts/claude.js';
 import { adaptCodex } from '../hosts/codex.js';
 import { adaptNormalized } from '../hosts/normalized.js';
+import { adaptDsh } from '../hosts/dsh.js';
+import { withFrozenTranscript, type FrozenSource } from '../hosts/frozen.js';
 import type { NormalizedTranscript } from '../hosts/types.js';
 import { atomicWriteText } from '../store/atomic.js';
 import type { RunFence } from '../store/commit.js';
@@ -65,6 +67,7 @@ export interface PreparePacket {
   prepared_at: string;
   evidence: EvidenceItem[];
   user_coverage: UserCoverageEntry[];
+  intervention_coverage?: UserCoverageEntry[];
   blocks: PrepareBlock[];
   existing_candidates: ExistingCandidateDigest[];
   submission_schema: unknown;
@@ -87,13 +90,14 @@ export interface PrepareOptions {
 }
 
 /** Hash every field used for evidence validation; exclude only run/time/presentation metadata. */
-export function packetInputHash(packet: Pick<PreparePacket, 'record_id' | 'snapshot' | 'evidence' | 'blocks' | 'user_coverage' | 'edit_signals' | 'rule_version' | 'prompt_hash' | 'submission_schema'>): Sha256Hash {
+export function packetInputHash(packet: Pick<PreparePacket, 'record_id' | 'snapshot' | 'evidence' | 'blocks' | 'user_coverage' | 'edit_signals' | 'rule_version' | 'prompt_hash' | 'submission_schema' | 'intervention_coverage'>): Sha256Hash {
   return stableHash({
     record_id: packet.record_id,
     snapshot: { ...packet.snapshot, captured_at: undefined },
     evidence: packet.evidence,
     blocks: packet.blocks,
     user_coverage: packet.user_coverage,
+    ...(packet.intervention_coverage === undefined ? {} : { intervention_coverage: packet.intervention_coverage }),
     edit_signals: packet.edit_signals ?? [],
     rule_version: packet.rule_version,
     prompt_hash: packet.prompt_hash,
@@ -156,6 +160,8 @@ function buildEvidence(recordId: string, events: readonly Event[]): EvidenceItem
       kind: evidenceKindFor(event),
       excerpt,
       source_ref: event.source_ref,
+      ...(event.origin === undefined ? {} : { origin: event.origin }),
+      ...(event.inherited === undefined ? {} : { inherited: event.inherited }),
       truncated,
     });
   });
@@ -291,12 +297,14 @@ async function hashFrozenRange(
   }
 }
 
-async function adaptAs(format: 'codex' | 'claude' | 'normalized', filePath: string): Promise<NormalizedTranscript> {
+async function adaptAs(format: 'codex' | 'claude' | 'dsh' | 'normalized', filePath: string): Promise<NormalizedTranscript> {
   switch (format) {
     case 'codex':
       return adaptCodex(filePath);
     case 'claude':
       return adaptClaude(filePath);
+    case 'dsh':
+      return adaptDsh(filePath);
     case 'normalized':
       return adaptNormalized(filePath);
   }
@@ -315,6 +323,10 @@ export interface BuildPacketInput {
 
 /** Freeze the input range and build the ordered packet; takes no lock, mutates no record. */
 export async function buildPacket(input: BuildPacketInput): Promise<PreparePacket> {
+  return withFrozenTranscript(input.transcriptPath, (transcriptPath, source) => buildDecodedPacket({ ...input, transcriptPath }, source));
+}
+
+async function buildDecodedPacket(input: BuildPacketInput, source?: FrozenSource): Promise<PreparePacket> {
   const sizeBefore = (await fs.stat(input.transcriptPath)).size;
   const { fingerprint, completeLines } = await hashFrozenRange(input.transcriptPath, sizeBefore);
   const format = await detectFormat(input.transcriptPath);
@@ -340,17 +352,29 @@ export async function buildPacket(input: BuildPacketInput): Promise<PreparePacke
     ? 'full' : 'partial';
   const layout = packBlocks(evidence, ordered);
   const { signals: editSignals, hints: reworkHints } = computeEditSignals(evidence, ordered);
+  const interventionCoverage = ordered.flatMap((event, index) => {
+    if (!isNativeIntervention(event)) return [];
+    const item = evidence[index];
+    if (item === undefined) return [];
+    return [{ event_id: event.id, evidence_id: item.id, primary_block: layout.blocks.find(block => block.evidence_ids.includes(item.id))?.index ?? 0 }];
+  });
   const last = ordered[ordered.length - 1];
   const promptHash = stableHash(submissionJsonSchema);
   const snapshotBase = snapshotSchema.parse({
     source_kind:
-      format === 'codex' ? 'codex_transcript' : format === 'claude' ? 'claude_transcript' : 'normalized_transcript',
+      format === 'codex' ? 'codex_transcript' : format === 'claude' ? 'claude_transcript' : format === 'dsh' ? 'dsh_transcript' : 'normalized_transcript',
     host: transcript.host,
     source_session_id: transcript.source_session_id,
     coverage,
     cutoff_event_id: last?.id ?? 'empty',
-    cutoff_byte_offset: sizeBefore,
-    source_fingerprint: fingerprint,
+    cutoff_byte_offset: source?.source_bytes ?? sizeBefore,
+    source_fingerprint: source?.source_fingerprint ?? fingerprint,
+    ...(source === undefined ? {} : { source_encoding: source.source_encoding, decoded_fingerprint: source.decoded_fingerprint,
+      decoded_byte_length: source.decoded_byte_length }),
+    ...(transcript.format_version === undefined ? {} : { format_version: transcript.format_version }),
+    ...(transcript.parent_session_id === undefined ? {} : { parent_session_id: transcript.parent_session_id }),
+    ...(transcript.inherited_events === undefined ? {} : { inherited_events: transcript.inherited_events }),
+    ...(format === 'dsh' ? { workspace_verification: transcript.workspace === undefined ? 'unavailable' : input.expectedIdentity?.workspace === undefined ? 'not_requested' : 'matched' } : {}),
     parser_version: transcript.parser_version,
     rule_version: input.ruleVersion,
     prompt_hash: promptHash,
@@ -364,6 +388,7 @@ export async function buildPacket(input: BuildPacketInput): Promise<PreparePacke
     evidence,
     blocks: layout.blocks,
     user_coverage: layout.coverage,
+    ...(interventionCoverage.length === 0 ? {} : { intervention_coverage: interventionCoverage }),
     edit_signals: editSignals,
     rule_version: input.ruleVersion,
     prompt_hash: promptHash,
@@ -384,6 +409,7 @@ export async function buildPacket(input: BuildPacketInput): Promise<PreparePacke
     prepared_at: new Date().toISOString(),
     evidence,
     user_coverage: layout.coverage,
+    ...(interventionCoverage.length === 0 ? {} : { intervention_coverage: interventionCoverage }),
     blocks: layout.blocks,
     existing_candidates: [],
     submission_schema: submissionJsonSchema,

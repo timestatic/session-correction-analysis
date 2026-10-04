@@ -46,6 +46,8 @@ export const sourceSnapshotSchema = z.object({
   byte_length: z.number().int().nonnegative(),
   frozen_bytes_base64: z.string(),
   parser_version: z.string().min(1),
+  native_metadata: z.object({ intervention_targets: z.boolean().optional(), format_version: z.number().int().nonnegative(), inherited_events: z.number().int().nonnegative(),
+    parent_session_id: z.string().min(1).optional() }).strict().optional(),
   coverage: z.enum(['full', 'partial']),
   parent_status: z.enum(['unverified', 'not_declared']),
   excluded_sidechain_records: z.number().int().nonnegative(),

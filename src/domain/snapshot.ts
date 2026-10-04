@@ -6,6 +6,7 @@ import { sha256HashSchema } from './hash.js';
 export const sourceKindSchema = z.enum([
   'codex_transcript',
   'claude_transcript',
+  'dsh_transcript',
   'normalized_transcript',
   'context_snapshot',
 ]);
@@ -27,6 +28,13 @@ export const snapshotSchema = z
     cutoff_event_id: z.string().min(1).optional(),
     cutoff_byte_offset: z.number().int().nonnegative().optional(),
     source_fingerprint: sha256HashSchema.optional(),
+    source_encoding: z.literal('zstd').optional(),
+    decoded_fingerprint: sha256HashSchema.optional(),
+    decoded_byte_length: z.number().int().nonnegative().optional(),
+    workspace_verification: z.enum(['matched', 'unavailable', 'not_requested']).optional(),
+    format_version: z.number().int().nonnegative().optional(),
+    parent_session_id: z.string().min(1).optional(),
+    inherited_events: z.number().int().nonnegative().optional(),
     parser_version: z.string().min(1),
     rule_version: z.string().min(1),
     prompt_hash: sha256HashSchema.optional(),

@@ -35,6 +35,7 @@ export const analyzeFactsSchema = z
     episodes: z.array(episodeCommittedSchema).default([]),
     evidence: z.array(evidenceItemSchema).default([]),
     processed_users: z.array(processedUserSchema).default([]),
+    processed_interventions: z.array(processedUserSchema).optional(),
     // Immutable provenance for retained candidates; never counted as current-run detections.
     candidate_sources: z.array(z.object({
       candidate_id: z.string().min(1),

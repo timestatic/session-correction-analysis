@@ -15,3 +15,6 @@
 
 # JetBrains IDE settings
 /.idea/
+
+# Private local analysis output
+/analysis-output/

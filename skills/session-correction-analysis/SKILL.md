@@ -15,7 +15,17 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
 - 只分析当前会话或用户明确指定的会话。会话 ID 必须可核验：不要把会话标题当作会话 ID，不要凭"最新文件"猜测，不要扫描全部历史。宿主没有直接给出会话信息时，走下文"定位当前会话（marker 探针）"协议；探针定位失败仍不可得时，请用户在宿主中输入 `/status` 并把拿到的 session ID 与 transcript 路径粘贴给你。
 - 批量例外（窄）：当且仅当用户自己编写的任务提示词明确授权批量分析时，可以批量处理：队列取 `records/*/analyze.md` 中 `analysis_status: pending` 的记录，宿主历史目录只在该提示词给定的时间窗内枚举，且只读 `session_meta` 行取 session ID 与 cwd。范围之外仍按上一条执行——不扩大扫描、不按"最近使用"挑会话；批量运行中一律不自动批准、不写 harness 或记忆。
 - 直接使用默认 data-root（`~/.session-correction-analysis`），下文命令不需要 `--data-root`，也不要向用户询问路径确认。仅当用户主动指定其他目录时才追加 `--data-root <path>` 并在后续所有命令保持一致。旧 rule_ref/rule_review 或发布状态会被拒绝，不迁移、不清空旧目录。
-- 若 record 尚未登记，先 `sca register --host <codex|claude> --session <id> --workspace <path> --transcript <path>`。
+- 若 record 尚未登记，先 `sca register --host <codex|claude|dsh> --session <id> --workspace <path> --transcript <path>`。
+
+## DSH v4 显式历史会话
+
+- CLI 注册接受 `--host dsh` 与显式 v4 JSONL/JSONL.zstd 文件，或单个会话目录。压缩输入需要 PATH 上有 `zstd`。正式发布的 Skill 命令入口为 `npx -y session-correction-analysis`。
+- cwd 存在时与注册工作区核验；缺少 cwd 允许导入，但 workspace 来自注册参数，`workspace_verification: unavailable`，不得声称匹配。macOS 缺少解压工具时可安装 `brew install zstd`。
+- 原生中断和审批使用独立 `intervention_coverage`；逐条阅读并提交 `processed_interventions: [{ evidence_id, status: "reviewed" | "uncertain" }]`，恰好覆盖该清单一次。不能把它们填入 `processed_users`。原生 episode 锚点只支持介入，必须引用自身证据，correction.detected 必须 false。审批未必来自真人，也未必表示拒绝，不能仅凭事件类型判阳性。缺回执或不确定会保留 partial。
+- 会话目录取最高规范版本；未知或旧版不回退，v0/v3 尚未支持。同版本多编码要求指定文件。DSH 暂不走下面的 marker 协议，请提供文件头的 ID、cwd 和明确 transcript 路径，不按最新历史猜测。
+- `evidence.origin.basis: native_metadata` 是原生来源声明，不是独立真人身份认证。保留所有用户角色覆盖，区分用户、Agent、宿主生成及未知来源。
+- `evidence.inherited: true` 是子会话继承的上下文。结合 snapshot 的 `parent_session_id/inherited_events` 解释，不能将父历史算为子会话新增纠错。报告分别列出继承与本会话新增范围，不继承父会话的语义判断或审核决定。
+- 读取冻结包即可；不要自行重读实时压缩文件拼接证据，也不要把压缩字节偏移当作解压内容行号。compaction、缺失流式提交或未知事件导致的 partial 必须显式报告。
 
 ## 定位当前会话（marker 探针）
 
@@ -33,7 +43,7 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    记下 `run_id`、`packet_path`、`coverage`。若返回 `lease_active`，说明已有分析在跑，停止。
    manifest 的 `analyze_doc_bytes` 是持久 `analyze.md` 的当前字节数：该文档跨 run **只追加、无界增长**（每次 ingest 都会永久写入被引用证据的 excerpt、episode provenance 和一条 run 记录），不受 `pending_limit_bytes`（只管单次提交/pending 事务）约束。数值已很大时说明历史臃肿，本次再引用大块证据会让它继续膨胀，应只引用真正相关的证据。
 2. 读取 `packet_path` 指向的 JSON 包。逐块（`blocks`）阅读 `evidence`（每条有 `id`、`excerpt`、`kind`），
-   对照 `user_coverage` 确保每条用户消息都被检视过，不只看关键词命中的片段。
+   对照 `user_coverage` 和可选 `intervention_coverage`，确保每条分析目标都被检视过，不只看关键词命中的片段。
    分析包只读，不得修改字段或重算摘要。v1 旧包或完整性错误须重新 prepare。
    包内可能还有确定性派生的辅助字段：
    - `edit_signals`：每次可识别的 `file_edit`/`tool_result` 的路径、区域指纹与成败判定；纳入 v2 摘要，只有带已知路径的 `change` 且 `success:true` 可佐证已完成修改。Codex 支持直接 `apply_patch`，以及 `exec` 包装的 `tools.apply_patch(...)`——patch 正文无论是内联 JSON 字符串字面量，还是绑定到标识符的模板字符串/heredoc（`*** Begin Patch … *** End Patch` 带真实换行）都能解析；无法可靠恢复 patch 正文（如标识符在别处定义）或混合/并发工具调用仍须记为证据不可用；
@@ -44,13 +54,15 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
    - 是否是执行介入（打断/叫停/禁止/接管/拒绝授权）；
    - 是否有返工证据（撤销/替换/修复了此前的修改）。
    证据不足时 confidence 用 `low`/`uncertain`，宁可保留不确定，不要虚构。
+   `evidence.origin` 是可选来源线索；`basis: wrapper_pattern` 仅表示封装模式匹配，不是身份认证。缺失或 unknown 不得默认当真人，user-role 也不等于真人。分别报告已核验真人、Agent 评论、宿主生成/工具回显及未知来源，保留所有 user_coverage，不按来源跳过阅读。混合封装中的实际请求须结合语义判断，不能把常驻模板禁令算作人工介入。
+   当前 episode 必须至少 correction.detected 或 intervention.detected 为 true；负例记入对应 processed_users 或 processed_interventions。纯需求演进返工不单独提交 episode，不得改判成纠错来绕过限制。
 4. 组装提交 JSON（严格符合包内 `submission_schema`）：
    - 提交 `processed_users: [{ evidence_id, status: "reviewed" | "uncertain" }]`，恰好覆盖
      `user_coverage` 中每条消息一次；负例也要记录。没有处理的消息不能填成 uncertain。
      旧版提交若缺此清单只能形成 partial 结论；清单漏项、重复或含未知 ID 会被拒收；
    - 所有 `evidence_id`/`anchor_event_id` 必须来自本包的 evidence id；
    - `citations[].quote` 必须是对应 `excerpt` 中的原文片段（会被逐字比对）；
-   - `anchor_event_id` 必须是 `user_coverage` 中某条用户消息的 evidence id；
+   - `anchor_event_id` 必须是 `user_coverage` 或 `intervention_coverage` 中的 evidence id；原生介入锚点须满足上面的标签与证据约束；
    - `prior_agent_behavior` 的事件必须早于锚点消息，`agent_behavior_after` 必须晚于；
    - 只有存在 `file_edit`/`tool_result` 证据时才能声明 rework `undone|replaced|fixed`；
    - 若包内存在 `edit_signals`（即本 Session 有编辑证据），rework.evidence 必须至少引用一个 change
@@ -115,9 +127,9 @@ description: 分析当前或明确指定的一次 Agent 会话中的用户纠错
   撤销只改状态并保留决定历史，不删除记录。
 - 向用户报告时给出 rule_id 与所在文件路径；检查回执 result，不能把 rejected/stale/duplicate 说成新落账。
 
-## 实验性批次协议（本地未发布）
+## 实验性批次协议
 
-仅在当前用户明确授权多个来源且安装版本确实提供 `batch` 时使用；不能扩大历史定位范围。命令入口仍为 `npx -y session-correction-analysis`，未发布前仅本地构建入口可用。
+仅在当前用户明确授权多个来源且安装版本确实提供 `batch` 时使用；不能扩大历史定位范围。命令入口仍为 `npx -y session-correction-analysis`。本地未发布改动使用构建入口或用户指定的本地测试包。
 
 - `sca batch --action create --input <batch-input.json> --data-root <独立私有目录>` 冻结显式来源；本实验例外要求明确 data-root，不用单会话默认根。
 - `sca batch --action page --batch <id> --max-bytes 32768 --data-root <同目录>` 读取有界证据，沿 next_cursor（`--cursor '<JSON>'`）续读；reading_reuse_of 仅正文引用，必要时用 `--evidence <id>` 展开，不能据此复用语义标签。

@@ -38,6 +38,7 @@ export const submissionRootSchema = z
     episodes: z.array(episodeSubmissionSchema),
     candidates: z.array(candidateSubmissionSchema),
     processed_users: z.array(processedUserSchema).optional(),
+    processed_interventions: z.array(processedUserSchema).optional(),
   })
   .strict();
 export type SubmissionRoot = z.infer<typeof submissionRootSchema>;
@@ -159,6 +160,9 @@ export async function loadPacket(repo: RecordRepository, recordId: string, runId
     prepared_at: value['prepared_at'] as string,
     evidence: evidenceList,
     user_coverage: userCoverage,
+    ...(value['intervention_coverage'] === undefined ? {} : { intervention_coverage: z.array(z.object({
+      event_id: z.string().min(1), evidence_id: z.string().min(1), primary_block: z.number().int().nonnegative(),
+    }).strict()).parse(value['intervention_coverage']) }),
     blocks: value['blocks'] as PreparePacket['blocks'],
     existing_candidates: [],
     submission_schema: value['submission_schema'],
@@ -373,11 +377,17 @@ function commitEpisodes(
     if (anchor === undefined) {
       throw new ScaError('evidence_not_found', `episode ${String(index)}: anchor ${episode.anchor_event_id} is not in the frozen packet`);
     }
-    const anchorEventId = userAnchorByEvidence.get(episode.anchor_event_id);
+    const nativeAnchor = packet.intervention_coverage?.find(entry => entry.evidence_id === episode.anchor_event_id);
+    if (nativeAnchor !== undefined && (!episode.intervention.detected || episode.correction.detected ||
+        !episode.intervention.evidence.includes(anchor.id) || anchor.origin?.basis !== 'native_metadata' ||
+        (anchor.kind !== 'interrupt' && anchor.kind !== 'approval'))) {
+      throw new ScaError('schema_invalid', 'native intervention anchors require an intervention label, its anchor evidence, and no textual correction label');
+    }
+    const anchorEventId = userAnchorByEvidence.get(episode.anchor_event_id) ?? nativeAnchor?.event_id;
     if (anchorEventId === undefined) {
       throw new ScaError(
         'schema_invalid',
-        `episode ${String(index)}: anchor must reference a user-message evidence id from the packet coverage list`,
+        `episode ${String(index)}: anchor must reference user_coverage or intervention_coverage evidence`,
       );
     }
     cited.add(episode.anchor_event_id);
@@ -534,8 +544,9 @@ function ensureRunLease(
 }
 
 function buildFacts(packet: PreparePacket, doc: AnalyzeDocument, episodes: EpisodeCommitted[], cited: Set<string>,
-  processed: SubmissionRoot['processed_users']): AnalyzeFacts {
-  const snapshot: Snapshot = processed === undefined ? { ...packet.snapshot, coverage: 'partial' } : packet.snapshot;
+  processed: SubmissionRoot['processed_users'], interventions: SubmissionRoot['processed_interventions']): AnalyzeFacts {
+  const snapshot: Snapshot = processed === undefined || ((packet.intervention_coverage?.length ?? 0) > 0 &&
+    (interventions === undefined || interventions.some(item => item.status === 'uncertain'))) ? { ...packet.snapshot, coverage: 'partial' } : packet.snapshot;
   const runs = doc.facts?.runs ?? [];
   return {
     snapshot,
@@ -543,6 +554,7 @@ function buildFacts(packet: PreparePacket, doc: AnalyzeDocument, episodes: Episo
     evidence: packet.evidence.filter((item) => cited.has(item.id)),
     candidate_sources: [],
     processed_users: processed ?? [],
+    ...(interventions === undefined ? {} : { processed_interventions: interventions }),
     parse_errors: [],
     runs: runs.concat(
       runRecordSchema.parse({
@@ -602,6 +614,16 @@ export async function ingestSubmission(
     }
   }
 
+  if (root.processed_interventions !== undefined) {
+    const expected = new Set((packet.intervention_coverage ?? []).map(entry => entry.evidence_id));
+    const seen = new Set<string>();
+    for (const unit of root.processed_interventions) {
+      if (!expected.has(unit.evidence_id) || seen.has(unit.evidence_id)) throw new ScaError('schema_invalid', 'processed_interventions contains unknown or duplicate evidence');
+      seen.add(unit.evidence_id);
+    }
+    if (seen.size !== expected.size) throw new ScaError('schema_invalid', 'processed_interventions must cover every native intervention target');
+  }
+
   const { analyze, candidates } = await repo.loadRecord(recordId);
   const doc = analyze.doc;
   await assertTranscriptIdentity(packet.snapshot, { host: doc.source, sessionId: doc.session_id });
@@ -635,7 +657,7 @@ export async function ingestSubmission(
   );
   const candidatesView = await flagStaleCandidates(repo, recordId, candidates, packet);
   const { planned, skipped } = planCandidates(root.candidates, candidatesView.doc, anchorToEpisodeId, evidence, cited);
-  const facts = buildFacts(packet, doc, committed, cited, root.processed_users);
+  const facts = buildFacts(packet, doc, committed, cited, root.processed_users, root.processed_interventions);
 
   await repo.beginCommit(recordId, fence, {
     analysisId: packet.analysis_id,

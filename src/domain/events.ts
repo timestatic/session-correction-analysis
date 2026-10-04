@@ -42,6 +42,13 @@ export const eventSchema = z
     timestamp: z.string().min(1).optional(),
     text: z.string().optional(),
     source_ref: eventSourceRefSchema,
+    inherited: z.boolean().optional(),
+    edit: z.object({ paths: z.array(z.string().min(1)), region_keys: z.array(z.string()) }).strict().optional(),
+    tool_status: z.enum(['succeeded', 'failed', 'unknown']).optional(),
   })
   .strict();
 export type Event = z.infer<typeof eventSchema>;
+
+export function isNativeIntervention(event: Pick<Event, 'kind' | 'origin'>): boolean {
+  return (event.kind === 'interrupt' || event.kind === 'approval') && event.origin?.basis === 'native_metadata';
+}

@@ -1,5 +1,5 @@
 import { sha256Tag } from '../domain/hash.js';
-import type { Event, EventKind } from '../domain/events.js';
+import type { Event, EventKind, MessageOrigin } from '../domain/events.js';
 import { ScaError } from '../domain/errors.js';
 import { endsWithNewline, readJsonl } from './reader.js';
 import { bumpIgnored, coverageFromStats, emptyStats, PARSER_VERSION } from './types.js';
@@ -32,6 +32,21 @@ function blocks(content: string | ClaudeBlock[] | undefined): ClaudeBlock[] {
     return [{ type: 'text', text: content }];
   }
   return content ?? [];
+}
+
+function userOrigin(text: string): MessageOrigin {
+  if (text.startsWith('<local-command-stdout>') || text.startsWith('<local-command-stderr>')) {
+    return { kind: 'tool_echo', basis: 'wrapper_pattern' };
+  }
+  if (text.startsWith('You are running as a local coding agent for a Melos workspace.') &&
+      text.includes('[NEW COMMENT] Another agent (')) {
+    return { kind: 'agent', basis: 'wrapper_pattern' };
+  }
+  if (['<local-command-caveat>', '<command-name>', '<task-notification>', '<skill_content', '<system-reminder>']
+    .some((prefix) => text.startsWith(prefix))) {
+    return { kind: 'host_generated', basis: 'wrapper_pattern' };
+  }
+  return { kind: 'unknown', basis: 'unavailable' };
 }
 
 function classifyToolUse(name: string | undefined): EventKind {
@@ -80,7 +95,9 @@ export async function adaptClaude(filePath: string): Promise<NormalizedTranscrip
             : record.type === 'user'
               ? 'user_message'
               : 'assistant_message';
-        events.push(makeEvent(blockId, kind, ordinal++, line.line, line.raw, record.timestamp, block.text));
+        const event = makeEvent(blockId, kind, ordinal++, line.line, line.raw, record.timestamp, block.text);
+        if (record.type === 'user') event.origin = userOrigin(block.text);
+        events.push(event);
       } else if (block.type === 'tool_use') {
         events.push(
           makeEvent(

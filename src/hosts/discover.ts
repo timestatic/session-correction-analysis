@@ -85,6 +85,7 @@ interface Candidates {
 }
 
 async function collectCandidates(input: DiscoverInput): Promise<Candidates> {
+  if (input.host === 'dsh') throw new ScaError('session_locator_unavailable', 'DSH currently requires an explicit v4 --transcript file or session directory');
   if (input.host === 'codex') {
     const root = path.join(input.homeDir, '.codex', 'sessions');
     const cutoff = (input.now ?? new Date()).getTime() - CODEX_LIVE_LOOKBACK_MS;

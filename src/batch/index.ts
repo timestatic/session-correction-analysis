@@ -4,9 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ZodError } from 'zod';
 
+import { isNativeIntervention } from '../domain/events.js';
 import { ScaError } from '../domain/errors.js';
 import { stableHash, stableStringify, sha256Tag } from '../domain/hash.js';
 import { adaptTranscript, assertTranscriptIdentity } from '../hosts/index.js';
+import { resolveDshTranscript } from '../hosts/dsh-paths.js';
 import { atomicWriteText } from '../store/atomic.js';
 import { withAdvisoryLock } from '../store/lock.js';
 import { validateLedger, validateManifest } from './integrity.js';
@@ -45,12 +47,13 @@ export async function buildBatch(input: unknown): Promise<BatchManifest> {
     if (created < Date.parse(parsed.scope.start) || created >= Date.parse(parsed.scope.end)) {
       invalid('source created_at is outside frozen scope');
     }
-    const sourcePath = path.resolve(entry.path);
+    const sourcePath = entry.host === 'dsh' ? await resolveDshTranscript(entry.path) : path.resolve(entry.path);
     const sourceSize = (await fs.stat(sourcePath)).size;
     if (sourceSize > 64 * 1024 * 1024) throw new ScaError('payload_too_large', 'prototype source limit is 64 MiB; split or use the original semantic workflow');
     const before = await readSourceBytes(sourcePath);
     const transcript = await adaptTranscript(sourcePath);
     await assertTranscriptIdentity(transcript, { host: entry.host, sessionId: entry.session_id });
+    if (entry.parent_session_id !== undefined && transcript.parent_session_id !== undefined && entry.parent_session_id !== transcript.parent_session_id) invalid('declared parent differs from DSH native parent');
     const after = await readSourceBytes(sourcePath);
     if (!before.equals(after)) throw new ScaError('coverage_incomplete', 'source changed during indexing; retry');
     const sourceHash = `sha256:${createHash('sha256').update(before).digest('hex')}`;
@@ -64,7 +67,7 @@ export async function buildBatch(input: unknown): Promise<BatchManifest> {
       events.push({ evidence_id: evidenceId, body_hash: bodyHash, event,
         ...(reuse === undefined ? {} : { reading_reuse_of: reuse }) });
       if (reuse === undefined) bodies.set(event.text ?? '', evidenceId);
-      if (event.kind === 'user_message') {
+      if (event.kind === 'user_message' || (entry.host === 'dsh' && isNativeIntervention(event))) {
         const targetId = `target-${stableHash(evidenceId).slice(7)}`;
         // Adapter event IDs may be line-derived: matching is advisory, never automatic event merging.
         const contextKey = stableStringify({ host: entry.host, session: entry.session_id,
@@ -86,6 +89,11 @@ export async function buildBatch(input: unknown): Promise<BatchManifest> {
       parser_version: transcript.parser_version,
       coverage: transcript.coverage === 'full' && transcript.stats.sidechain_records === 0 && transcript.stats.compacted_records === 0 ? 'full' : 'partial',
       excluded_sidechain_records: transcript.stats.sidechain_records, compacted_records: transcript.stats.compacted_records,
+      ...(transcript.format_version === undefined ? {} : { native_metadata: {
+        ...(entry.host === 'dsh' ? { intervention_targets: true } : {}),
+        format_version: transcript.format_version, inherited_events: transcript.inherited_events ?? 0,
+        ...(transcript.parent_session_id === undefined ? {} : { parent_session_id: transcript.parent_session_id }),
+      } }),
       parent_status: entry.parent_session_id === undefined ? 'not_declared' : 'unverified', events });
   }
   return manifestSchema.parse({ schema: 'session-correction-analysis/batch-manifest/v1',
@@ -310,6 +318,7 @@ export interface BatchStatus {
   manifest_hash: string; revision: number; targets: number; inspected: number;
   semantic_complete: number; pending: number; uncertain: number; source_partial: number;
   coverage: 'partial' | 'full'; audit_limit: string;
+  target_scope_counts?: { inherited: number; local: number };
   labels: { correction: number; intervention: number; intersection: number; positive_targets: number };
   actor_coverage: { role: SourceSnapshot['input']['role']; targets: number; submitted: number;
     sufficient: number; pending: number; uncertain: number; partial_sources: number; submitted_coverage: number | null }[];
@@ -346,10 +355,16 @@ export function batchStatusFromContext(context: BatchReadContext, ledgerInput: u
       uncertain: submitted.filter(item => item.judgment === 'uncertain').length, partial_sources: sources.filter(source => source.coverage === 'partial').length,
       submitted_coverage: targets.length === 0 ? null : sufficient / targets.length };
   });
+  const targetEvidence = new Set(manifest.targets.map(target => target.evidence_id));
+  const targetScope = manifest.sources.flatMap(source => source.events).reduce((counts, item) => {
+    if (targetEvidence.has(item.evidence_id)) counts[item.event.inherited === true ? 'inherited' : 'local'] += 1;
+    return counts;
+  }, { inherited: 0, local: 0 });
   return { manifest_hash: context.manifest_hash, revision: ledger.revision, targets: manifest.targets.length,
     inspected: current.size, semantic_complete: complete, pending: manifest.targets.length - current.size,
     uncertain: [...current.values()].filter(item => item.judgment === 'uncertain').length,
     source_partial: partial, coverage: complete === manifest.targets.length && partial === 0 ? 'full' : 'partial',
     actor_coverage: actorCoverage, labels: labelCounts,
+    ...(manifest.sources.some(source => source.input.host === 'dsh') ? { target_scope_counts: targetScope } : {}),
     audit_limit: 'Coverage validates submitted claims, not actual model reading; source roles and parent identities require independent verification. No candidate decisions are changed.' };
 }

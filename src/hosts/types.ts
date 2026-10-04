@@ -21,6 +21,9 @@ export interface NormalizedTranscript {
   events: Event[];
   stats: TranscriptStats;
   parser_version: string;
+  format_version?: number;
+  parent_session_id?: string;
+  inherited_events?: number;
 }
 
 export const PARSER_VERSION = '0.1.1';

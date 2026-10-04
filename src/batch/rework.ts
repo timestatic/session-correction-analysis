@@ -1,4 +1,4 @@
-import { extractPaths } from '../analysis/rework.js';
+import { extractPaths, toolResultSuccess } from '../analysis/rework.js';
 import { validateManifest } from './integrity.js';
 import type { BatchManifest } from './schema.js';
 
@@ -31,9 +31,8 @@ export function reworkEvidencePairs(input: BatchManifest): ReworkEvidencePair[] 
       if (paired?.length !== 1) return [];
       const result = paired[0];
       if (result === undefined || result.position <= index) return [];
-      const text = result.result.event.text ?? '';
-      if (/(error|failed|failure|denied|not found|rejected)/i.test(text) || !/(completed|succeeded|success|applied|updated|created)/i.test(text)) return [];
-      return [{ item, index, result, paths: extractPaths(item.event.text ?? '') }];
+      if (toolResultSuccess(result.result.event) !== true) return [];
+      return [{ item, index, result, paths: item.event.edit?.paths ?? extractPaths(item.event.text ?? '') }];
     });
     for (const target of manifest.targets.filter(target => target.source_id === source.source_id)) {
       const anchor = positions.get(target.evidence_id);

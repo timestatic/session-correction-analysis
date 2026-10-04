@@ -11,7 +11,7 @@ export interface CandidateDetail {
   provenance: {
     status: 'available' | 'incomplete' | 'unavailable';
     episodes: EpisodeCommitted[];
-    evidence: Pick<EvidenceItem, 'id' | 'kind' | 'excerpt'>[];
+    evidence: Pick<EvidenceItem, 'id' | 'kind' | 'excerpt' | 'origin' | 'inherited'>[];
     missing_ids: string[];
   };
 }
@@ -32,7 +32,7 @@ export async function candidateDetail(repo: RecordRepository, recordId: string, 
     revision: candidates.doc.revision, candidate, allowed_actions: allowedActions(candidate),
     provenance: {
       status: source === undefined ? 'unavailable' : missing.length > 0 ? 'incomplete' : 'available',
-      episodes, evidence: evidence.map(({ id, kind, excerpt }) => ({ id, kind, excerpt })), missing_ids: missing,
+      episodes, evidence: evidence.map(({ id, kind, excerpt, origin, inherited }) => ({ id, kind, excerpt, ...(origin === undefined ? {} : { origin }), ...(inherited === undefined ? {} : { inherited }) })), missing_ids: missing,
     },
   };
 }
